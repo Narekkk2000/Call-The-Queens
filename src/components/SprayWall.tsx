@@ -14,6 +14,8 @@ const DEFAULTS: SprayConfig = {
   drips: true,
   sound: true,
   canSize: 1,
+  // Beat of silence on the finished mural before the coming-soon screen.
+  revealDelay: 1200,
 };
 
 export function SprayWall(overrides: SprayWallProps) {
@@ -29,6 +31,7 @@ export function SprayWall(overrides: SprayWallProps) {
   const floorRef = useRef<HTMLCanvasElement>(null);
   const grainRef = useRef<HTMLCanvasElement>(null);
   const canRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<SprayEngine | null>(null);
 
   // The engine runs outside React's render cycle, so it reads state through a
@@ -47,6 +50,7 @@ export function SprayWall(overrides: SprayWallProps) {
       floor: floorRef.current,
       grain: grainRef.current,
       can: canRef.current,
+      controls: controlsRef.current,
     };
     if (Object.values(els).some((el) => el === null)) return;
 
@@ -107,14 +111,14 @@ export function SprayWall(overrides: SprayWallProps) {
       <div className="hint" style={{ opacity: hintVisible ? 1 : 0 }}>
         <div className="hint__row">
           <div className="hint__rule hint__rule--left" />
-          <div className="hint__headline">Hold &amp; drag to spray</div>
+          <div className="hint__headline">Hold &amp; drag your mouse to spray</div>
           <div className="hint__rule hint__rule--right" />
         </div>
         <div className="hint__sub">Reveal the wall</div>
         <div className="hint__tail" />
       </div>
 
-      <div className="controls">
+      <div className="controls" ref={controlsRef}>
         <button type="button" className="controls__button" onClick={() => setMuted((m) => !m)}>
           {muted ? 'SOUND OFF' : 'SOUND ON'}
         </button>

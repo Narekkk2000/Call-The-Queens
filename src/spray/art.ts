@@ -18,5 +18,4 @@ export const ART: Art = {
   splat: '255,80,215',
 };
 
-/** Resolves the art path against Vite's configured base URL. */
-export const artUrl = (src: string): string => import.meta.env.BASE_URL + src;
+export { assetUrl as artUrl } from '../site';

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { site } from '../site';
+import { assetUrl, site } from '../site';
 import './RevealScreen.css';
 
 /** Paint splats that pop before the full-screen flood sweeps over them. */
@@ -105,6 +105,8 @@ export function RevealScreen() {
 
       <div className="reveal" ref={rootRef}>
         <section className="reveal__section reveal__section--hero">
+          <img className="hero__logo" src={assetUrl(site.logo)} alt={site.brand} />
+
           <div className="hero__eyebrow">
             <div className="hero__eyebrow-rule hero__eyebrow-rule--left" />
             <div className="eyebrow-text">{site.brand}</div>

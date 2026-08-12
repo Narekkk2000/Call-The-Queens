@@ -19,6 +19,11 @@ export type SprayConfig = {
   sound: boolean;
   /** Multiplier on the auto-sized spray can. */
   canSize: number;
+  /**
+   * How long to hold on the finished mural, in ms, after the wall finishes
+   * flooding and before the coming-soon screen takes over.
+   */
+  revealDelay: number;
 };
 
 export type SprayElements = {
@@ -29,6 +34,8 @@ export type SprayElements = {
   floor: HTMLCanvasElement;
   grain: HTMLCanvasElement;
   can: HTMLDivElement;
+  /** The sound/reset cluster — the can gets out of its way. */
+  controls: HTMLDivElement;
 };
 
 export type SprayHost = {
@@ -100,6 +107,13 @@ const MAX_SWEEPS = 3.6;
 /** Sanity rails, not tuning — the formula is well behaved between them. */
 const RADIUS_MIN = 32;
 const RADIUS_MAX = 420;
+
+/**
+ * How far outside the sound/reset cluster the can starts getting out of the
+ * way, in CSS pixels. The stage hides the system cursor, so without this the
+ * can sits under the pointer and the buttons are awkward to aim at.
+ */
+const CONTROLS_MARGIN = 44;
 
 /**
  * Edge of one density bucket, in CSS pixels, at the 120px reference radius.
@@ -177,6 +191,11 @@ export class SprayEngine {
   private floodT = 0;
   private coverage = 0;
   private hintHidden = false;
+  /** True from the moment the wall is fully revealed until the hold expires. */
+  private completing = false;
+  private completeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Controls cluster in wrap-local coordinates, already padded. Null until measured. */
+  private controlsBox: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private sizeCheck = 0;
   private nextRattle = 0;
   private errShown = false;
@@ -218,6 +237,7 @@ export class SprayEngine {
 
   destroy(): void {
     this.destroyed = true;
+    this.cancelCompletionHold();
     this.stopLoop();
     this.unbindPointer();
     window.removeEventListener('resize', this.onResize);
@@ -233,6 +253,7 @@ export class SprayEngine {
 
   /** Back to a blank wall: mask, drips, mist, meter and hint all reset. */
   clearWall(): void {
+    this.cancelCompletionHold();
     const m = this.maskCtx;
     if (m) {
       m.save();
@@ -321,6 +342,56 @@ export class SprayEngine {
     if (this.hintHidden) return;
     this.hintHidden = true;
     this.host.onHintVisibleChange(false);
+  }
+
+  // --------------------------------------------------------------- completion
+
+  /**
+   * The wall has finished flooding. Hold on the completed mural for a beat
+   * before handing over to the coming-soon screen — going straight there skips
+   * past the payoff the visitor just worked for.
+   */
+  private beginCompletionHold(): void {
+    if (this.completing) return;
+    this.completing = true;
+    this.completeTimer = setTimeout(() => {
+      this.completeTimer = null;
+      if (this.destroyed) return;
+      this.host.onComplete();
+    }, this.host.getConfig().revealDelay);
+  }
+
+  private cancelCompletionHold(): void {
+    if (this.completeTimer) {
+      clearTimeout(this.completeTimer);
+      this.completeTimer = null;
+    }
+    this.completing = false;
+  }
+
+  // ---------------------------------------------------------------- proximity
+
+  /** Caches the controls cluster in wrap-local space; it only moves on resize. */
+  private measureControls(): void {
+    const wrap = this.els.wrap.getBoundingClientRect();
+    const box = this.els.controls.getBoundingClientRect();
+    if (!box.width || !box.height) {
+      this.controlsBox = null;
+      return;
+    }
+    this.controlsBox = {
+      x0: box.left - wrap.left - CONTROLS_MARGIN,
+      y0: box.top - wrap.top - CONTROLS_MARGIN,
+      x1: box.right - wrap.left + CONTROLS_MARGIN,
+      y1: box.bottom - wrap.top + CONTROLS_MARGIN,
+    };
+  }
+
+  /** True when the pointer is close enough to the buttons to want a real cursor. */
+  private get nearControls(): boolean {
+    const b = this.controlsBox;
+    if (!b) return false;
+    return this.ptr.x >= b.x0 && this.ptr.x <= b.x1 && this.ptr.y >= b.y0 && this.ptr.y <= b.y1;
   }
 
   // ------------------------------------------------------------------- radius
@@ -425,8 +496,10 @@ export class SprayEngine {
     const r = this.els.wrap.getBoundingClientRect();
     this.W = Math.max(2, Math.round(r.width));
     this.H = Math.max(2, Math.round(r.height));
-    this.floorH = Math.round(this.H * FLOOR_RATIO);
-    this.wallH = this.H - this.floorH;
+    // Floors of 1: mounting into a hidden or zero-size container would
+    // otherwise round these to 0 and every drawImage of them would throw.
+    this.floorH = Math.max(1, Math.round(this.H * FLOOR_RATIO));
+    this.wallH = Math.max(1, this.H - this.floorH);
     this.dpr = Math.min(1.6, window.devicePixelRatio || 1);
 
     // Preserve the paint already on the wall across a viewport change.
@@ -439,8 +512,8 @@ export class SprayEngine {
     }
 
     const fit = (c: HTMLCanvasElement, w: number, h: number) => {
-      c.width = Math.round(w * this.dpr);
-      c.height = Math.round(h * this.dpr);
+      c.width = Math.max(1, Math.round(w * this.dpr));
+      c.height = Math.max(1, Math.round(h * this.dpr));
       const x = c.getContext('2d')!;
       x.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       return x;
@@ -484,6 +557,7 @@ export class SprayEngine {
     this.rebuildDensity(this.radius);
 
     this.grain();
+    this.measureControls();
     if (!this.engaged) this.parkCan();
     this.dirty = true;
   }
@@ -500,10 +574,12 @@ export class SprayEngine {
 
   private placeCan(shake: number): void {
     const done = this.host.isDone();
+    // Yield to the system cursor over the buttons, otherwise they are hard to hit.
+    const yielding = done || this.nearControls;
     const el = this.els.can;
-    el.style.transition = 'opacity .45s ease';
-    el.style.opacity = done ? '0' : '1';
-    this.els.wrap.style.cursor = done ? 'auto' : 'none';
+    el.style.transition = `opacity ${done ? '.45s' : '.18s'} ease`;
+    el.style.opacity = yielding ? '0' : '1';
+    this.els.wrap.style.cursor = yielding ? 'auto' : 'none';
     const tx = this.can.x - 0.465 * this.canW + shake;
     const ty = this.can.y - 0.06 * this.canW;
     el.style.transform = `translate3d(${tx}px,${ty}px,0) rotate(${this.can.rot.toFixed(2)}deg)`;
@@ -594,7 +670,10 @@ export class SprayEngine {
    * artwork is uncovered, `finishing` takes over and floods the rest.
    */
   private measure(): void {
-    if (!this.reachable || !this.maskCtx || this.finishing || this.host.isDone()) return;
+    // `completing` matters: the mask is fully white during the hold, so without
+    // it this would re-trip the threshold and restart the flood.
+    if (!this.reachable || !this.maskCtx || this.finishing || this.completing) return;
+    if (this.host.isDone()) return;
     this.sctx.clearRect(0, 0, SAMPLE_W, SAMPLE_H);
     this.sctx.drawImage(
       this.mask,
@@ -827,14 +906,16 @@ export class SprayEngine {
 
     this.placeCan(this.ptr.down ? Math.sin(now / 22) * 1.6 : 0);
 
-    // Only spray once the can has caught up with the cursor.
+    // Only spray once the can has caught up with the cursor, and never while
+    // reaching for the buttons or during the hold on the finished mural.
     const settled = Math.hypot(this.can.x - this.ptr.x, this.can.y - this.ptr.y) < 70;
-    if (this.ptr.down && settled && !done && !this.finishing) {
+    const near = this.nearControls;
+    if (this.ptr.down && settled && !done && !this.finishing && !this.completing && !near) {
       this.spray();
       this.setHiss(0.16);
     } else {
       this.lastStamp = null;
-      if (!this.ptr.down) this.setHiss(0);
+      if (!this.ptr.down || near || this.completing) this.setHiss(0);
     }
 
     if (this.finishing) {
@@ -849,7 +930,7 @@ export class SprayEngine {
         this.floodT = 0;
         this.setHiss(0);
         this.host.onProgress(1);
-        this.host.onComplete();
+        this.beginCompletionHold();
       }
     }
 

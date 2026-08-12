@@ -1,6 +1,10 @@
+/** Resolves a path in `public/` against Vite's configured base URL. */
+export const assetUrl = (path: string): string => import.meta.env.BASE_URL + path;
+
 /** Everything a non-developer is likely to want to edit lives here. */
 export const site = {
   brand: 'Call The Queens',
+  logo: 'assets/logo.webp',
   tagline: 'The queens are lacing up',
   category: 'Weed delivery · North Hollywood, CA',
   phone: {

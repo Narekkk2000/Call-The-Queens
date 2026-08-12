@@ -108,6 +108,17 @@
 
 /* --------------------------------------------------------------- hero copy */
 
+.hero__logo {
+  position: absolute;
+  top: clamp(16px, 3vh, 40px);
+  left: clamp(16px, 3.5vw, 52px);
+  width: clamp(96px, 13vw, 210px);
+  height: auto;
+  /* Fades in with the eyebrow rules rather than popping in on mount. */
+  animation: ctqFade 0.9s 0.7s ease both;
+  pointer-events: none;
+}
+
 .hero__eyebrow {
   display: flex;
   align-items: center;
