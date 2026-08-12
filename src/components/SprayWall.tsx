@@ -111,7 +111,11 @@ export function SprayWall(overrides: SprayWallProps) {
       <div className="hint" style={{ opacity: hintVisible ? 1 : 0 }}>
         <div className="hint__row">
           <div className="hint__rule hint__rule--left" />
-          <div className="hint__headline">Hold &amp; drag your mouse to spray</div>
+          {/* Same instruction, phrased for the device's primary input. */}
+          <div className="hint__headline">
+            <span className="hint__copy--pointer">Hold &amp; drag your mouse to spray</span>
+            <span className="hint__copy--touch">Hold &amp; drag to spray</span>
+          </div>
           <div className="hint__rule hint__rule--right" />
         </div>
         <div className="hint__sub">Reveal the wall</div>

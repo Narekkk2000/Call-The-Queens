@@ -182,6 +182,22 @@
   animation: ctqPulse 2.6s ease-in-out infinite;
 }
 
+/* Keyed off the primary input, not viewport width: a narrow desktop window
+   still has a mouse, and a tablet does not. */
+.hint__copy--touch {
+  display: none;
+}
+
+@media (hover: none) {
+  .hint__copy--pointer {
+    display: none;
+  }
+
+  .hint__copy--touch {
+    display: inline;
+  }
+}
+
 .hint__sub {
   font-family: Archivo, sans-serif;
   font-style: italic;
