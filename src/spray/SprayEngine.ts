@@ -66,6 +66,9 @@ type FloorDrip = {
   drift: number;
 };
 
+/** A patch of paint that is still wet, and the gloss it carries while it dries. */
+type WetMark = { x: number; y: number; r: number; life: number };
+
 type MistPuff = {
   x: number;
   y: number;
@@ -150,6 +153,11 @@ export class SprayEngine {
   private readonly sample = document.createElement('canvas');
   private readonly fink = document.createElement('canvas');
   private readonly glowSmall = document.createElement('canvas');
+  /** Low-res, saturation-boosted mural — the wet colour a fresh pass lays down. */
+  private readonly muralSoft = document.createElement('canvas');
+  /** Sharp mural masked by coverage squared, so detail only resolves in thick paint. */
+  private readonly detail = document.createElement('canvas');
+  private detailCtx: CanvasRenderingContext2D | null = null;
   private readonly sctx: CanvasRenderingContext2D;
 
   // Live contexts, (re)created on every resize.
@@ -189,6 +197,7 @@ export class SprayEngine {
   private drips: Drip[] = [];
   private floorDrips: FloorDrip[] = [];
   private mist: MistPuff[] = [];
+  private wet: WetMark[] = [];
   private ptr = { x: 0, y: 0, down: false };
   private can = { x: 0, y: 0, rot: 10, tx: 0, ty: 0 };
   private lastStamp: { x: number; y: number } | null = null;
@@ -272,6 +281,7 @@ export class SprayEngine {
     this.drips = [];
     this.floorDrips = [];
     this.mist = [];
+    this.wet = [];
     if (this.finkCtx) {
       this.finkCtx.save();
       this.finkCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -467,6 +477,26 @@ export class SprayEngine {
       if (l > 46) this.ink[i] = 1;
     }
     this.markReachableInk();
+    this.buildSoftMural();
+  }
+
+  /**
+   * A tiny, saturation-boosted copy of the mural. Drawn back at full size with
+   * smoothing it becomes a soft colour field — the wet pigment a pass leaves
+   * behind, before the artwork itself resolves out of it.
+   */
+  private buildSoftMural(): void {
+    if (!this.mural?.naturalWidth) return;
+    const w = 132;
+    const h = Math.max(1, Math.round((w * this.mural.naturalHeight) / this.mural.naturalWidth));
+    this.muralSoft.width = w;
+    this.muralSoft.height = h;
+    const x = this.muralSoft.getContext('2d')!;
+    x.clearRect(0, 0, w, h);
+    // Fresh paint is more saturated than the dried artwork it becomes.
+    x.filter = 'saturate(1.5)';
+    x.drawImage(this.mural, 0, 0, w, h);
+    x.filter = 'none';
   }
 
   /**
@@ -534,6 +564,7 @@ export class SprayEngine {
     this.fctx = fit(this.els.floor, this.W, this.floorH);
     this.maskCtx = fit(this.mask, this.W, this.wallH);
     this.finkCtx = fit(this.fink, this.W, this.floorH);
+    this.detailCtx = fit(this.detail, this.W, this.wallH);
     this.hasMask = true;
 
     if (keep) {
@@ -733,7 +764,10 @@ export class SprayEngine {
     m.fill();
 
     m.fillStyle = '#fff';
-    const n = Math.round(30 * Math.min(2, Math.max(1, r / 54)));
+    const scale = Math.min(2, Math.max(1, r / 54));
+
+    // Body droplets, uniform over the disc and thinning outward.
+    const n = Math.round(34 * scale);
     for (let i = 0; i < n; i++) {
       const ang = Math.random() * TAU;
       const t = Math.sqrt(Math.random()); // uniform over the disc
@@ -746,12 +780,29 @@ export class SprayEngine {
       m.arc(px, py, sz, 0, TAU);
       m.fill();
     }
-    if (Math.random() < 0.28) {
+
+    // A grainy rim concentrated around the cone edge. Without this the stamp
+    // ends in a clean gradient, which reads as wiping something clean rather
+    // than as atomised paint landing on concrete.
+    const rim = Math.round(30 * scale);
+    for (let i = 0; i < rim; i++) {
       const ang = Math.random() * TAU;
-      const rr = r * (1.15 + Math.random() * 0.7);
-      m.globalAlpha = 0.22 + Math.random() * 0.3;
+      const rr = r * (0.72 + Math.random() * 0.46);
+      const sz = 0.28 + Math.random() * 1.05;
+      m.globalAlpha = (0.05 + Math.random() * 0.3) * strength;
       m.beginPath();
-      m.arc(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr, 0.6 + Math.random() * 1.6, 0, TAU);
+      m.arc(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr, sz, 0, TAU);
+      m.fill();
+    }
+
+    // Overspray: the fine dust that drifts past the cone and settles.
+    const dust = 3 + ((Math.random() * 4) | 0);
+    for (let i = 0; i < dust; i++) {
+      const ang = Math.random() * TAU;
+      const rr = r * (1.18 + Math.random() * 1.15);
+      m.globalAlpha = (0.03 + Math.random() * 0.16) * strength;
+      m.beginPath();
+      m.arc(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr, 0.3 + Math.random() * 1.3, 0, TAU);
       m.fill();
     }
     m.restore();
@@ -828,6 +879,10 @@ export class SprayEngine {
       });
     }
     if (this.mist.length > 420) this.mist.splice(0, this.mist.length - 420);
+
+    // Fresh paint is glossy and dries matte; this is that highlight.
+    this.wet.push({ x: nx, y: ny, r: radius * 0.78, life: 1 });
+    if (this.wet.length > 90) this.wet.splice(0, this.wet.length - 90);
   }
 
   // --------------------------------------------------------------------- loop
@@ -1077,18 +1132,47 @@ export class SprayEngine {
     }
   }
 
-  /** Masks the mural through the sprayed area, then rebuilds bloom and floor. */
+  /**
+   * Builds the wall in two coats so the wall reads as *painted*, not wiped
+   * clean:
+   *
+   *  1. wet coat — soft, saturated colour at the mask's own alpha, so the first
+   *     pass over bare concrete leaves pigment rather than finished artwork;
+   *  2. detail coat — the sharp mural at alpha squared, so the artwork only
+   *     resolves where paint has actually built up.
+   *
+   * Squaring is just the mask drawn into itself with `destination-in`.
+   */
   private compose(W: number, wallH: number): void {
     const p = this.pctx!;
+    const muralReady = !!(this.mural?.complete && this.mural.naturalWidth);
     p.save();
     p.setTransform(1, 0, 0, 1, 0, 0);
     p.clearRect(0, 0, this.els.paint.width, this.els.paint.height);
     p.restore();
+
     p.drawImage(this.mask, 0, 0, W, wallH);
-    if (this.mural?.complete && this.mural.naturalWidth) {
+    if (muralReady) {
       p.globalCompositeOperation = 'source-in';
-      p.drawImage(this.mural, this.mx, this.my, this.mw, this.mh);
+      p.imageSmoothingEnabled = true;
+      p.imageSmoothingQuality = 'high';
+      p.drawImage(this.muralSoft, this.mx, this.my, this.mw, this.mh);
       p.globalCompositeOperation = 'source-over';
+    }
+
+    const d = this.detailCtx;
+    if (muralReady && d) {
+      d.save();
+      d.setTransform(1, 0, 0, 1, 0, 0);
+      d.clearRect(0, 0, this.detail.width, this.detail.height);
+      d.restore();
+      d.drawImage(this.mask, 0, 0, W, wallH);
+      d.globalCompositeOperation = 'destination-in';
+      d.drawImage(this.mask, 0, 0, W, wallH);
+      d.globalCompositeOperation = 'source-in';
+      d.drawImage(this.mural!, this.mx, this.my, this.mw, this.mh);
+      d.globalCompositeOperation = 'source-over';
+      p.drawImage(this.detail, 0, 0, W, wallH);
     }
 
     const gs = this.gsctx!;
@@ -1149,6 +1233,24 @@ export class SprayEngine {
     m.setTransform(1, 0, 0, 1, 0, 0);
     m.clearRect(0, 0, this.els.mist.width, this.els.mist.height);
     m.restore();
+
+    for (let i = this.wet.length - 1; i >= 0; i--) {
+      const w = this.wet[i];
+      w.life -= 0.016;
+      if (w.life <= 0) {
+        this.wet.splice(i, 1);
+        continue;
+      }
+      // Screen blend on this canvas, so white reads as a wet specular.
+      const wg = m.createRadialGradient(w.x, w.y - w.r * 0.22, 0, w.x, w.y, w.r);
+      wg.addColorStop(0, `rgba(255,255,255,${(0.1 * w.life).toFixed(3)})`);
+      wg.addColorStop(0.45, `rgba(255,240,252,${(0.045 * w.life).toFixed(3)})`);
+      wg.addColorStop(1, 'rgba(255,255,255,0)');
+      m.fillStyle = wg;
+      m.beginPath();
+      m.arc(w.x, w.y, w.r, 0, TAU);
+      m.fill();
+    }
 
     for (let i = this.mist.length - 1; i >= 0; i--) {
       const q = this.mist[i];
