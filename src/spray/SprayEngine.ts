@@ -104,6 +104,14 @@ const RADIUS_K = 120 / Math.sqrt(1512 * 731);
  */
 const MIN_SWEEPS = 2.6;
 const MAX_SWEEPS = 3.6;
+/**
+ * On a portrait phone the wall is tall and narrow, so an area-derived cone ends
+ * up enormous relative to the screen — nearly half its width. Cap the radius
+ * against width so the spray stays visually proportional. This deliberately
+ * wins over the sweep band above: on a phone, looking right beats matching
+ * desktop effort exactly. Only ever binds on narrow stages.
+ */
+const RADIUS_MAX_WIDTH_FRACTION = 0.18;
 /** Sanity rails, not tuning — the formula is well behaved between them. */
 const RADIUS_MIN = 32;
 const RADIUS_MAX = 420;
@@ -409,7 +417,8 @@ export class SprayEngine {
       this.wallH / (2 * MAX_SWEEPS),
       Math.min(this.wallH / (2 * MIN_SWEEPS), area),
     );
-    return Math.max(RADIUS_MIN, Math.min(RADIUS_MAX, bounded * c.radiusScale));
+    const capped = Math.min(bounded, this.W * RADIUS_MAX_WIDTH_FRACTION);
+    return Math.max(RADIUS_MIN, Math.min(RADIUS_MAX, capped * c.radiusScale));
   }
 
   /** Density buckets are sized relative to the cone, not to fixed pixels. */
@@ -548,7 +557,10 @@ export class SprayEngine {
     this.mx = (this.W - this.mw) / 2;
     this.my = (this.wallH - this.mh) / 2;
 
-    this.canW = Math.max(84, Math.min(196, this.H * 0.215)) * this.host.getConfig().canSize;
+    // Bounded by width as well as height: sizing off height alone made the can
+    // ~40% of the screen on a portrait phone.
+    const canFit = Math.min(this.H * 0.215, this.W * 0.24);
+    this.canW = Math.max(84, Math.min(196, canFit)) * this.host.getConfig().canSize;
     this.els.can.style.width = `${this.canW}px`;
     this.els.can.style.transformOrigin = `${0.465 * this.canW}px ${0.06 * this.canW}px`;
 
@@ -564,7 +576,9 @@ export class SprayEngine {
 
   private parkCan(): void {
     const h = (this.canW || 150) * 2.12;
-    this.can.x = this.W * 0.735;
+    // Parked far enough right to clear the centred hint headline, which is a
+    // single nowrap line on desktop and reaches ~78% of the stage width.
+    this.can.x = this.W * 0.86;
     this.can.y = this.wallH - h + 18;
     this.can.tx = this.can.x;
     this.can.ty = this.can.y;

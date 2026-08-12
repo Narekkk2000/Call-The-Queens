@@ -301,3 +301,51 @@
   display: block;
   overflow: visible;
 }
+
+/* ------------------------------------------------------------------ mobile */
+
+@media (max-width: 700px) {
+  /* The headline is nowrap by design; on a narrow stage it has to wrap or it
+     runs off both edges. The flanking rules are dropped to buy it that width. */
+  /* Lifted clear of the parked can, which reaches much further up the stage
+     once the wall is portrait. */
+  .hint {
+    bottom: 42%;
+    gap: 8px;
+    padding: 0 20px;
+  }
+
+  .hint__rule {
+    display: none;
+  }
+
+  .hint__row {
+    gap: 0;
+  }
+
+  .hint__headline {
+    white-space: normal;
+    text-align: center;
+    text-wrap: balance;
+    font-size: clamp(19px, 6.2vw, 30px);
+    line-height: 1.14;
+  }
+
+  /* Meter and buttons share the bottom edge and collide once the stage is
+     narrow, so give the meter its own row above them. */
+  .hud {
+    left: 18px;
+    right: 18px;
+    bottom: 78px;
+  }
+
+  .hud__track {
+    flex: 1;
+    width: auto;
+  }
+
+  .controls {
+    right: 18px;
+    bottom: 20px;
+  }
+}
