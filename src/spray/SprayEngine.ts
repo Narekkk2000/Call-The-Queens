@@ -24,6 +24,16 @@ export type SprayConfig = {
    * flooding and before the coming-soon screen takes over.
    */
   revealDelay: number;
+  /**
+   * Milliseconds of flight time between paint leaving the nozzle and landing
+   * on the wall, so the aerosol is visibly in the air first.
+   *
+   * The perceived lag is `drag speed x delay`, so this trades directly against
+   * responsiveness: at a typical 500px/s drag, 150ms puts the paint ~75px
+   * behind the can — around half a spray radius, which reads as travel. Past
+   * ~300ms it stops reading as physics and starts reading as input lag.
+   */
+  sprayDelay: number;
 };
 
 export type SprayElements = {
@@ -65,6 +75,9 @@ type FloorDrip = {
   maxPool: number;
   drift: number;
 };
+
+/** Paint in flight: emitted at the nozzle, lands once `due` has passed. */
+type PaintPacket = { x: number; y: number; r: number; strength: number; due: number };
 
 type MistPuff = {
   x: number;
@@ -194,6 +207,7 @@ export class SprayEngine {
   private drips: Drip[] = [];
   private floorDrips: FloorDrip[] = [];
   private mist: MistPuff[] = [];
+  private pending: PaintPacket[] = [];
   private ptr = { x: 0, y: 0, down: false };
   private can = { x: 0, y: 0, rot: 10, tx: 0, ty: 0 };
   private lastStamp: { x: number; y: number } | null = null;
@@ -277,6 +291,7 @@ export class SprayEngine {
     this.drips = [];
     this.floorDrips = [];
     this.mist = [];
+    this.pending = [];
     if (this.finkCtx) {
       this.finkCtx.save();
       this.finkCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -823,8 +838,11 @@ export class SprayEngine {
     this.dirty = true;
   }
 
-  /** Interpolates stamps along the pointer's travel so fast drags stay solid. */
-  private spray(): void {
+  /**
+   * Interpolates along the pointer's travel so fast drags stay solid, emitting
+   * each puff into the flight queue rather than painting it immediately.
+   */
+  private spray(now: number): void {
     const nx = this.can.x;
     const ny = this.can.y;
     if (ny > this.wallH + 40) return;
@@ -844,19 +862,19 @@ export class SprayEngine {
       // Sweeping quickly lays down less paint per unit distance.
       const speedFade = Math.min(1, 26 / (dist + 8));
       for (let i = 1; i <= steps; i++) {
-        this.stamp(
+        this.emit(
           last.x + dx * (i / steps),
           last.y + dy * (i / steps),
           radius * (0.92 + Math.random() * 0.16),
           0.55 + 0.45 * speedFade,
+          now,
         );
       }
-      if (steps === 0) this.stamp(nx, ny, radius * (0.94 + Math.random() * 0.12), 1);
+      if (steps === 0) this.emit(nx, ny, radius * (0.94 + Math.random() * 0.12), 1, now);
     } else {
-      this.stamp(nx, ny, radius, 1);
+      this.emit(nx, ny, radius, 1, now);
     }
     this.lastStamp = { x: nx, y: ny };
-    this.sprayed = true;
 
     const hues = ART.hues;
     for (let i = 0; i < (radius > 80 ? 13 : 9); i++) {
@@ -874,6 +892,34 @@ export class SprayEngine {
       });
     }
     if (this.mist.length > 420) this.mist.splice(0, this.mist.length - 420);
+  }
+
+  /**
+   * Puts one puff of paint in the air, aimed where the can was when it fired.
+   * It lands there even if the can has moved on, which is what gives the
+   * stroke its trailing edge.
+   */
+  private emit(x: number, y: number, r: number, strength: number, now: number): void {
+    this.pending.push({ x, y, r, strength, due: now + this.host.getConfig().sprayDelay });
+    if (this.pending.length > 1500) this.pending.splice(0, this.pending.length - 1500);
+  }
+
+  /**
+   * Lands every packet whose flight time has elapsed. Packets are pushed with a
+   * constant delay off a monotonic clock, so the queue is always sorted by
+   * `due` and a prefix scan is enough.
+   */
+  private landPaint(now: number): void {
+    let n = 0;
+    while (n < this.pending.length && this.pending[n].due <= now) n++;
+    if (!n) return;
+    for (let i = 0; i < n; i++) {
+      const p = this.pending[i];
+      this.stamp(p.x, p.y, p.r, p.strength);
+    }
+    this.pending.splice(0, n);
+    // Coverage only counts paint that has actually arrived.
+    this.sprayed = true;
   }
 
   // --------------------------------------------------------------------- loop
@@ -971,7 +1017,7 @@ export class SprayEngine {
     const settled = Math.hypot(this.can.x - this.ptr.x, this.can.y - this.ptr.y) < 70;
     const near = this.nearControls;
     if (this.ptr.down && settled && !done && !this.finishing && !this.completing && !near) {
-      this.spray();
+      this.spray(now);
       this.setHiss(0.16);
     } else {
       this.lastStamp = null;
@@ -993,6 +1039,9 @@ export class SprayEngine {
         this.beginCompletionHold();
       }
     }
+
+    // After spray(), so a zero delay still lands paint on the same frame.
+    this.landPaint(now);
 
     this.stepDrips(wallH);
     this.stepFloorDrips();

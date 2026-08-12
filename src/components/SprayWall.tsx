@@ -16,6 +16,9 @@ const DEFAULTS: SprayConfig = {
   canSize: 1,
   // Beat of silence on the finished mural before the coming-soon screen.
   revealDelay: 1200,
+  // Flight time from nozzle to wall. See the note on SprayConfig.sprayDelay
+  // before raising this — it is perceived lag as much as it is physics.
+  sprayDelay: 150,
 };
 
 export function SprayWall(overrides: SprayWallProps) {
