@@ -338,7 +338,11 @@
 }
 
 .contact__cta-arrow {
-  font-style: normal;
+  width: 0.82em;
+  height: 0.82em;
+  flex: none;
+  /* Inherits the button's colour, including the hover swap to white. */
+  color: currentcolor;
 }
 
 .contact__grid {

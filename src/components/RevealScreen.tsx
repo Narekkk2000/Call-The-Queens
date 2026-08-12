@@ -193,7 +193,19 @@ export function RevealScreen() {
             rel="noopener noreferrer"
           >
             {site.menuLabel}
-            <span className="contact__cta-arrow">&#8599;</span>
+            {/* Drawn rather than typed: U+2197 has an emoji presentation, which
+                iOS picks by default, so the glyph renders as a blue emoji tile
+                on mobile and a plain arrow on desktop. */}
+            <svg className="contact__cta-arrow" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M6.5 17.5 L17.5 6.5 M9.5 6.5 H17.5 V14.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
           </a>
 
           <div className="reveal__item contact__grid" data-reveal="4">

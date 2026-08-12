@@ -136,6 +136,13 @@ const RADIUS_MAX = 420;
  */
 const CONTROLS_MARGIN = 44;
 
+/** Body length below the nozzle, as a multiple of the can's width. */
+const CAN_BODY_LENGTH = 2.06;
+/** Clearance kept between the foot of the can and the bottom of the stage. */
+const CAN_EDGE_GAP = 8;
+/** Never tilt past this; beyond it the can reads as lying down rather than angled. */
+const CAN_MAX_TILT = 74;
+
 /**
  * Edge of one density bucket, in CSS pixels, at the 120px reference radius.
  * Buckets decide where paint has pooled enough to start running, so the bucket
@@ -612,6 +619,7 @@ export class SprayEngine {
     this.grain();
     this.measureControls();
     if (!this.engaged) this.parkCan();
+    else this.clampCanIntoStage();
     this.dirty = true;
   }
 
@@ -624,6 +632,24 @@ export class SprayEngine {
     this.can.tx = this.can.x;
     this.can.ty = this.can.y;
     this.can.rot = 0;
+    this.placeCan(0);
+  }
+
+  /**
+   * After a viewport change the can may still be holding a target from the old
+   * geometry — a rotation, or the mobile URL bar collapsing, is enough — which
+   * strands it off-screen until the next touch. Pull it back inside.
+   */
+  private clampCanIntoStage(): void {
+    const half = this.canW * 0.5;
+    const minX = Math.min(half, this.W / 2);
+    const maxX = Math.max(this.W - half, this.W / 2);
+    const clampX = (v: number) => Math.max(minX, Math.min(maxX, v));
+    const clampY = (v: number) => Math.max(0, Math.min(this.wallH, v));
+    this.can.x = clampX(this.can.x);
+    this.can.tx = clampX(this.can.tx);
+    this.can.y = clampY(this.can.y);
+    this.can.ty = clampY(this.can.ty);
     this.placeCan(0);
   }
 
@@ -997,7 +1023,28 @@ export class SprayEngine {
     this.can.y += (this.can.ty - this.can.y) * ease;
     const vx = this.can.x - px;
     const vy = this.can.y - py;
-    const targetRot = Math.max(-26, Math.min(26, vx * 1.5)) + (this.engaged ? 9 : 0);
+    let targetRot = Math.max(-26, Math.min(26, vx * 1.5)) + (this.engaged ? 9 : 0);
+
+    // The can hangs below the nozzle, so a touch low on a short screen runs the
+    // body off the bottom edge — very easy to do with a thumb on a phone.
+    // Tilt it away instead: the nozzle is the transform origin, so rotating
+    // about it keeps the tip exactly under the pointer while the body swings
+    // into view. Angling a can is what you would do with a real one anyway.
+    const bodyLen = this.canW * CAN_BODY_LENGTH;
+    const room = this.H - CAN_EDGE_GAP - this.can.y;
+    if (bodyLen > room) {
+      // The lowest point of a tilted can is a bottom *corner*, not the centre
+      // line, so the half-width counts: reach = halfW·sin|θ| + bodyLen·cos|θ|.
+      // Writing that as R·cos(θ − δ) gives the angle that brings it to `room`.
+      const halfW = this.canW * 0.535;
+      const reach = Math.hypot(halfW, bodyLen);
+      const delta = Math.atan2(halfW, bodyLen);
+      const need = ((delta + Math.acos(Math.max(-1, Math.min(1, room / reach)))) * 180) / Math.PI;
+      // Positive rotation swings the body left, so pick the roomier side.
+      const away = this.can.x < this.W / 2 ? -1 : 1;
+      const edgeRot = away * Math.min(CAN_MAX_TILT, need);
+      if (Math.abs(edgeRot) > Math.abs(targetRot)) targetRot = edgeRot;
+    }
     this.can.rot += (targetRot - this.can.rot) * 0.16;
 
     // Moving the can without spraying shakes the ball bearing.
