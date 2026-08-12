@@ -66,9 +66,6 @@ type FloorDrip = {
   drift: number;
 };
 
-/** A patch of paint that is still wet, and the gloss it carries while it dries. */
-type WetMark = { x: number; y: number; r: number; life: number };
-
 type MistPuff = {
   x: number;
   y: number;
@@ -197,7 +194,6 @@ export class SprayEngine {
   private drips: Drip[] = [];
   private floorDrips: FloorDrip[] = [];
   private mist: MistPuff[] = [];
-  private wet: WetMark[] = [];
   private ptr = { x: 0, y: 0, down: false };
   private can = { x: 0, y: 0, rot: 10, tx: 0, ty: 0 };
   private lastStamp: { x: number; y: number } | null = null;
@@ -281,7 +277,6 @@ export class SprayEngine {
     this.drips = [];
     this.floorDrips = [];
     this.mist = [];
-    this.wet = [];
     if (this.finkCtx) {
       this.finkCtx.save();
       this.finkCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -879,10 +874,6 @@ export class SprayEngine {
       });
     }
     if (this.mist.length > 420) this.mist.splice(0, this.mist.length - 420);
-
-    // Fresh paint is glossy and dries matte; this is that highlight.
-    this.wet.push({ x: nx, y: ny, r: radius * 0.78, life: 1 });
-    if (this.wet.length > 90) this.wet.splice(0, this.wet.length - 90);
   }
 
   // --------------------------------------------------------------------- loop
@@ -1233,24 +1224,6 @@ export class SprayEngine {
     m.setTransform(1, 0, 0, 1, 0, 0);
     m.clearRect(0, 0, this.els.mist.width, this.els.mist.height);
     m.restore();
-
-    for (let i = this.wet.length - 1; i >= 0; i--) {
-      const w = this.wet[i];
-      w.life -= 0.016;
-      if (w.life <= 0) {
-        this.wet.splice(i, 1);
-        continue;
-      }
-      // Screen blend on this canvas, so white reads as a wet specular.
-      const wg = m.createRadialGradient(w.x, w.y - w.r * 0.22, 0, w.x, w.y, w.r);
-      wg.addColorStop(0, `rgba(255,255,255,${(0.1 * w.life).toFixed(3)})`);
-      wg.addColorStop(0.45, `rgba(255,240,252,${(0.045 * w.life).toFixed(3)})`);
-      wg.addColorStop(1, 'rgba(255,255,255,0)');
-      m.fillStyle = wg;
-      m.beginPath();
-      m.arc(w.x, w.y, w.r, 0, TAU);
-      m.fill();
-    }
 
     for (let i = this.mist.length - 1; i >= 0; i--) {
       const q = this.mist[i];
