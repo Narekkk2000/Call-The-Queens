@@ -877,7 +877,7 @@ export class SprayEngine {
     this.lastStamp = { x: nx, y: ny };
 
     const hues = ART.hues;
-    for (let i = 0; i < (radius > 80 ? 13 : 9); i++) {
+    for (let i = 0; i < (radius > 80 ? 22 : 15); i++) {
       const ang = -Math.PI / 2 + (Math.random() - 0.5) * 5.4;
       const sp = 0.4 + Math.random() * 2.6;
       this.mist.push({
@@ -885,13 +885,13 @@ export class SprayEngine {
         y: ny + (Math.random() - 0.5) * radius * 0.8,
         vx: Math.cos(ang) * sp * 0.5,
         vy: Math.sin(ang) * sp * 0.5 - 0.25,
-        r: 2 + Math.random() * 12,
-        a: 0.1 + Math.random() * 0.22,
+        r: 2 + Math.random() * 14,
+        a: 0.17 + Math.random() * 0.33,
         life: 1,
         h: hues[(Math.random() * hues.length) | 0],
       });
     }
-    if (this.mist.length > 420) this.mist.splice(0, this.mist.length - 420);
+    if (this.mist.length > 640) this.mist.splice(0, this.mist.length - 640);
   }
 
   /**
@@ -1052,7 +1052,7 @@ export class SprayEngine {
     }
 
     this.els.glow.style.opacity = done ? (0.62 + Math.sin(now / 900) * 0.16).toFixed(3) : '0.5';
-    this.drawMist(done);
+    this.drawMist(done, now);
   }
 
   /** Advances wall drips, painting them straight into the reveal mask. */
@@ -1266,13 +1266,45 @@ export class SprayEngine {
     f.drawImage(this.fink, 0, 0, W, H);
   }
 
+  /**
+   * Pigment still in the air, drawn where it is about to land. It fades in over
+   * the packet's flight and hands off to real paint on arrival, so a stroke has
+   * a visible cloud of paint running ahead of the wet edge.
+   */
+  private drawInFlight(m: CanvasRenderingContext2D, now: number): void {
+    const delay = this.host.getConfig().sprayDelay;
+    if (delay <= 0) return;
+    const hues = ART.hues;
+    const tail = hues[1] || hues[0];
+    // Only the most recent packets matter visually, and this bounds the cost.
+    const from = Math.max(0, this.pending.length - 90);
+    for (let i = from; i < this.pending.length; i++) {
+      const p = this.pending[i];
+      const t = 1 - (p.due - now) / delay; // 0 at the nozzle, 1 on landing
+      if (t <= 0 || t >= 1) continue;
+      const a = Math.sin(Math.PI * t) * 0.3 * p.strength;
+      if (a < 0.004) continue;
+      const r = p.r * (0.4 + t * 0.75);
+      const g = m.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      g.addColorStop(0, `rgba(${hues[0]},${a.toFixed(3)})`);
+      g.addColorStop(0.5, `rgba(${tail},${(a * 0.5).toFixed(3)})`);
+      g.addColorStop(1, `rgba(${tail},0)`);
+      m.fillStyle = g;
+      m.beginPath();
+      m.arc(p.x, p.y, r, 0, TAU);
+      m.fill();
+    }
+  }
+
   /** Aerosol overcast plus the coloured cone around the nozzle while spraying. */
-  private drawMist(done: boolean): void {
+  private drawMist(done: boolean, now: number): void {
     const m = this.mctx!;
     m.save();
     m.setTransform(1, 0, 0, 1, 0, 0);
     m.clearRect(0, 0, this.els.mist.width, this.els.mist.height);
     m.restore();
+
+    this.drawInFlight(m, now);
 
     for (let i = this.mist.length - 1; i >= 0; i--) {
       const q = this.mist[i];
@@ -1281,8 +1313,8 @@ export class SprayEngine {
       q.vy -= 0.012; // buoyancy
       q.vx *= 0.985;
       q.vy *= 0.985;
-      q.r += 0.42;
-      q.life -= 0.022;
+      q.r += 0.46;
+      q.life -= 0.017;
       if (q.life <= 0) {
         this.mist.splice(i, 1);
         continue;
@@ -1300,8 +1332,8 @@ export class SprayEngine {
       const r = this.radius * 2.2;
       const hues = ART.hues;
       const rg = m.createRadialGradient(this.can.x, this.can.y, 0, this.can.x, this.can.y, r);
-      rg.addColorStop(0, `rgba(${hues[0]},0.20)`);
-      rg.addColorStop(0.4, `rgba(${hues[1] || hues[0]},0.08)`);
+      rg.addColorStop(0, `rgba(${hues[0]},0.26)`);
+      rg.addColorStop(0.4, `rgba(${hues[1] || hues[0]},0.12)`);
       rg.addColorStop(1, `rgba(${hues[1] || hues[0]},0)`);
       m.fillStyle = rg;
       m.beginPath();
