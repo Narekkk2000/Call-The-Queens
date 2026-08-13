@@ -10,7 +10,14 @@ const DEFAULTS: SprayConfig = {
   // `radius` is intentionally absent: it is derived from the stage size so the
   // effort to reveal the wall is the same on every display.
   radiusScale: 1,
-  threshold: 0.6,
+  // Share of the artwork's ink that has to be uncovered before the wall floods
+  // itself. The ink is concentrated in the middle of the piece, so a low bar
+  // trips on the centre pass alone: at 0.6 the reveal fired midway through the
+  // second sweep, with most of the wall still bare. Measured on a 800x778
+  // stage, a full sweep of the wall lands ~40% of the ink, so this asks for
+  // roughly three of them — the mural reads as finished, and the flood is left
+  // to take the far corners rather than making you hunt them.
+  threshold: 0.8,
   drips: true,
   sound: true,
   canSize: 1,
