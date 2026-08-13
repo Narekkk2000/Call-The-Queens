@@ -116,9 +116,9 @@ const FLOOR_RATIO = 0.15;
 const RADIUS_K = 120 / Math.sqrt(1512 * 731);
 
 /**
- * √A alone still lets *aspect ratio* move the effort around: sweeping a wall
- * takes `wallH / 2r` screen-widths of drag, so a tall narrow phone costs far
- * more passes than a wide monitor. The reference viewport works out at ~3.05
+ * √A alone still lets *aspect ratio* move the effort around: sweeping the
+ * artwork takes `height / 2r` screen-widths of drag, so a tall narrow phone
+ * costs far more passes than a wide monitor. The reference viewport is ~3.05
  * screen-widths; hold every stage within a narrow band of that so extreme
  * shapes stay in the same ballpark without letting the cone balloon to a
  * comical fraction of a small screen.
@@ -136,6 +136,15 @@ const RADIUS_MAX_WIDTH_FRACTION = 0.18;
 /** Sanity rails, not tuning — the formula is well behaved between them. */
 const RADIUS_MIN = 32;
 const RADIUS_MAX = 420;
+
+/**
+ * Everything above equalises effort in *screen-widths of drag*, which is the
+ * right unit for a mouse and the wrong one for a thumb: a screen-width on a
+ * phone is one flick, so a portrait stage that matches a desktop on paper is
+ * over in seconds in the hand. Shrink the cone further when the stage is taller
+ * than it is wide. Empirical, and the only place the two are treated unequally.
+ */
+const PORTRAIT_EFFORT = 1.3;
 
 /**
  * How far outside the sound/reset cluster the can starts getting out of the
@@ -466,14 +475,21 @@ export class SprayEngine {
   private get radius(): number {
     const c = this.host.getConfig();
     if (c.radius != null) return c.radius;
-    const area = RADIUS_K * Math.sqrt(this.W * this.wallH);
+    // Measured against the artwork on screen, not the wall it hangs on. The two
+    // are the same thing in landscape, where the mural covers the wall — but on
+    // a portrait stage the piece sits in a band across the middle, and all the
+    // ink with it. Sizing off the wall there hands a phone a cone wide enough
+    // to clear that band in a couple of passes, and the reveal fires long
+    // before the wall looks worked. What should be constant across displays is
+    // sweeps *of the mural*.
+    const artW = this.mw ? Math.min(this.W, this.mw) : this.W;
+    const artH = this.mh ? Math.min(this.wallH, this.mh) : this.wallH;
+    const area = RADIUS_K * Math.sqrt(artW * artH);
     // Keep the implied number of sweeps inside the band above.
-    const bounded = Math.max(
-      this.wallH / (2 * MAX_SWEEPS),
-      Math.min(this.wallH / (2 * MIN_SWEEPS), area),
-    );
+    const bounded = Math.max(artH / (2 * MAX_SWEEPS), Math.min(artH / (2 * MIN_SWEEPS), area));
     const capped = Math.min(bounded, this.W * RADIUS_MAX_WIDTH_FRACTION);
-    return Math.max(RADIUS_MIN, Math.min(RADIUS_MAX, capped * c.radiusScale));
+    const effort = this.wallH > this.W ? capped / PORTRAIT_EFFORT : capped;
+    return Math.max(RADIUS_MIN, Math.min(RADIUS_MAX, effort * c.radiusScale));
   }
 
   /** Density buckets are sized relative to the cone, not to fixed pixels. */
