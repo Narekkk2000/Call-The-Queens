@@ -151,6 +151,16 @@ const RADIUS_MAX = 420;
 const PORTRAIT_EFFORT = 1.55;
 
 /**
+ * Portrait crops the mural to its middle, so the ink left on screen is the
+ * subject itself — the skate and the wordmark — and none of the frame-edge tags
+ * that make a high bar a corner hunt on a wide stage. Ask for nearly all of it
+ * there. Below this the wall can pass the configured threshold while the skate
+ * is still half dark: the drips cut revealed stripes through it, which counts
+ * as coverage but does not look like a finished piece.
+ */
+const PORTRAIT_THRESHOLD = 0.93;
+
+/**
  * How far outside the sound/reset cluster the can starts getting out of the
  * way, in CSS pixels. The stage hides the system cursor, so without this the
  * can sits under the pointer and the buttons are awkward to aim at.
@@ -827,7 +837,8 @@ export class SprayEngine {
     }
     this.coverage = this.reachableCount ? hit / this.reachableCount : 0;
 
-    const threshold = this.host.getConfig().threshold;
+    const configured = this.host.getConfig().threshold;
+    const threshold = this.wallH > this.W ? Math.max(configured, PORTRAIT_THRESHOLD) : configured;
     this.host.onProgress(Math.min(1, this.coverage / threshold));
     if (this.sprayed && this.coverage >= threshold) this.finishing = true;
   }
