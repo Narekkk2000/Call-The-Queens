@@ -133,8 +133,12 @@ const MAX_SWEEPS = 3.6;
  * desktop effort exactly. Only ever binds on narrow stages.
  */
 const RADIUS_MAX_WIDTH_FRACTION = 0.18;
-/** Sanity rails, not tuning — the formula is well behaved between them. */
-const RADIUS_MIN = 32;
+/**
+ * Sanity rails, not tuning — the formula is well behaved between them. The
+ * floor came down from 32 when `PORTRAIT_EFFORT` grew: on a 320px-wide phone
+ * the two met, and the rail would have quietly eaten any further tuning.
+ */
+const RADIUS_MIN = 24;
 const RADIUS_MAX = 420;
 
 /**
@@ -144,7 +148,7 @@ const RADIUS_MAX = 420;
  * over in seconds in the hand. Shrink the cone further when the stage is taller
  * than it is wide. Empirical, and the only place the two are treated unequally.
  */
-const PORTRAIT_EFFORT = 1.3;
+const PORTRAIT_EFFORT = 1.55;
 
 /**
  * How far outside the sound/reset cluster the can starts getting out of the
