@@ -81,7 +81,11 @@ type FloorDrip = {
 /** Paint in flight: emitted at the nozzle, lands once `due` has passed. */
 type PaintPacket = { x: number; y: number; r: number; strength: number; due: number };
 
-type MistPuff = {
+/**
+ * A drop of paint thrown off the cone. Not a puff of smoke: it leaves the
+ * nozzle fast, falls, and keeps its size instead of billowing out.
+ */
+type Droplet = {
   x: number;
   y: number;
   vx: number;
@@ -89,6 +93,8 @@ type MistPuff = {
   r: number;
   a: number;
   life: number;
+  /** Life lost per frame — heavy drops hang around, fine ones flash past. */
+  decay: number;
   h: string;
 };
 
@@ -152,6 +158,11 @@ const CAN_MAX_TILT = 74;
  */
 const CELL_PER_RADIUS = 20 / 120;
 /**
+ * Pull on airborne paint, in px/frame². Smoke rises; paint falls, and this is
+ * the single value that decides which one the spray reads as.
+ */
+const DROPLET_GRAVITY = 0.08;
+/**
  * Least of the mural's width that may ever be on screen. A plain cover fit is
  * driven by the short axis, so on a portrait phone it showed only ~27% of the
  * piece and cut both ends off the skate. The skate spans about half the image,
@@ -167,7 +178,7 @@ const TAU = 6.2832;
 
 /**
  * Owns every canvas on the stage: the reveal mask, the mural composite, the
- * bloom pass, the aerosol mist, the concrete grain and the floor reflection.
+ * bloom pass, the airborne paint, the concrete grain and the floor reflection.
  *
  * Deliberately framework-free — React mounts the DOM and owns `done`/`muted`/
  * `variant`, while this class runs the rAF loop and talks back through `host`.
@@ -224,9 +235,12 @@ export class SprayEngine {
   private dens = new Float32Array(0);
   private drips: Drip[] = [];
   private floorDrips: FloorDrip[] = [];
-  private mist: MistPuff[] = [];
+  private droplets: Droplet[] = [];
   private pending: PaintPacket[] = [];
   private ptr = { x: 0, y: 0, down: false };
+  /** Can travel this frame, in px — the jet lags behind it. */
+  private canVx = 0;
+  private canVy = 0;
   private can = { x: 0, y: 0, rot: 10, tx: 0, ty: 0 };
   private lastStamp: { x: number; y: number } | null = null;
   private dirty = true;
@@ -308,7 +322,7 @@ export class SprayEngine {
     }
     this.drips = [];
     this.floorDrips = [];
-    this.mist = [];
+    this.droplets = [];
     this.pending = [];
     if (this.finkCtx) {
       this.finkCtx.save();
@@ -921,22 +935,30 @@ export class SprayEngine {
     }
     this.lastStamp = { x: nx, y: ny };
 
+    // Spatter thrown off the cone. It leaves fast in every direction, carries a
+    // little of the stroke's own travel, and then falls — paint coming off a
+    // nozzle, not exhaust.
     const hues = ART.hues;
-    for (let i = 0; i < (radius > 80 ? 22 : 15); i++) {
-      const ang = -Math.PI / 2 + (Math.random() - 0.5) * 5.4;
-      const sp = 0.4 + Math.random() * 2.6;
-      this.mist.push({
-        x: nx + (Math.random() - 0.5) * radius * 0.8,
-        y: ny + (Math.random() - 0.5) * radius * 0.8,
-        vx: Math.cos(ang) * sp * 0.5,
-        vy: Math.sin(ang) * sp * 0.5 - 0.25,
-        r: 2 + Math.random() * 14,
-        a: 0.17 + Math.random() * 0.33,
+    const dragX = last ? nx - last.x : 0;
+    const dragY = last ? ny - last.y : 0;
+    for (let i = 0; i < (radius > 80 ? 16 : 11); i++) {
+      const ang = Math.random() * TAU;
+      const sp = 0.7 + Math.random() * 3.6;
+      // A few fat drops among the atomised mass, as a real cone throws.
+      const heavy = Math.random() < 0.16;
+      this.droplets.push({
+        x: nx + (Math.random() - 0.5) * radius * 0.55,
+        y: ny + (Math.random() - 0.5) * radius * 0.55,
+        vx: Math.cos(ang) * sp + dragX * 0.16,
+        vy: Math.sin(ang) * sp * 0.7 + dragY * 0.16,
+        r: heavy ? 1.5 + Math.random() * 2.1 : 0.45 + Math.random() * 1.15,
+        a: 0.55 + Math.random() * 0.4,
         life: 1,
+        decay: heavy ? 0.03 + Math.random() * 0.02 : 0.055 + Math.random() * 0.05,
         h: hues[(Math.random() * hues.length) | 0],
       });
     }
-    if (this.mist.length > 640) this.mist.splice(0, this.mist.length - 640);
+    if (this.droplets.length > 420) this.droplets.splice(0, this.droplets.length - 420);
   }
 
   /**
@@ -1042,6 +1064,9 @@ export class SprayEngine {
     this.can.y += (this.can.ty - this.can.y) * ease;
     const vx = this.can.x - px;
     const vy = this.can.y - py;
+    // Kept for the jet, which trails behind the nozzle as the can travels.
+    this.canVx = vx;
+    this.canVy = vy;
     let targetRot = Math.max(-26, Math.min(26, vx * 1.5)) + (this.engaged ? 9 : 0);
 
     // The can hangs below the nozzle, so a touch low on a short screen runs the
@@ -1118,7 +1143,7 @@ export class SprayEngine {
     }
 
     this.els.glow.style.opacity = done ? (0.62 + Math.sin(now / 900) * 0.16).toFixed(3) : '0.5';
-    this.drawMist(done, now);
+    this.drawAirborne(done, now);
   }
 
   /** Advances wall drips, painting them straight into the reveal mask. */
@@ -1378,22 +1403,30 @@ export class SprayEngine {
       const p = this.pending[i];
       const t = 1 - (p.due - now) / delay; // 0 at the nozzle, 1 on landing
       if (t <= 0 || t >= 1) continue;
-      const a = Math.sin(Math.PI * t) * 0.3 * p.strength;
-      if (a < 0.004) continue;
-      const r = p.r * (0.4 + t * 0.75);
-      const g = m.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
-      g.addColorStop(0, `rgba(${hues[0]},${a.toFixed(3)})`);
-      g.addColorStop(0.5, `rgba(${tail},${(a * 0.5).toFixed(3)})`);
-      g.addColorStop(1, `rgba(${tail},0)`);
-      m.fillStyle = g;
+      const a = Math.sin(Math.PI * t) * 0.5 * p.strength;
+      if (a < 0.01) continue;
+      // Strands, not a disc: the packet arrives as a handful of streaks flung
+      // out from its centre, spreading as it closes on the wall.
+      const r = p.r * (0.35 + t * 0.7);
+      const h = (i & 1) === 0 ? hues[0] : tail;
+      m.strokeStyle = `rgba(${h},${a.toFixed(3)})`;
+      m.lineWidth = 0.8 + p.r * 0.035;
       m.beginPath();
-      m.arc(p.x, p.y, r, 0, TAU);
-      m.fill();
+      for (let s = 0; s < 3; s++) {
+        const ang = Math.random() * TAU;
+        const cos = Math.cos(ang);
+        const sin = Math.sin(ang);
+        const r0 = r * (0.15 + Math.random() * 0.4);
+        const r1 = r0 + r * (0.25 + Math.random() * 0.55);
+        m.moveTo(p.x + cos * r0, p.y + sin * r0);
+        m.lineTo(p.x + cos * r1, p.y + sin * r1);
+      }
+      m.stroke();
     }
   }
 
-  /** Aerosol overcast plus the coloured cone around the nozzle while spraying. */
-  private drawMist(done: boolean, now: number): void {
+  /** Spatter in the air plus the wet spot the cone is laying down. */
+  private drawAirborne(done: boolean, now: number): void {
     const m = this.mctx!;
     m.save();
     m.setTransform(1, 0, 0, 1, 0, 0);
@@ -1402,40 +1435,102 @@ export class SprayEngine {
 
     this.drawInFlight(m, now);
 
-    for (let i = this.mist.length - 1; i >= 0; i--) {
-      const q = this.mist[i];
+    m.lineCap = 'round';
+    for (let i = this.droplets.length - 1; i >= 0; i--) {
+      const q = this.droplets[i];
+      q.vy += DROPLET_GRAVITY;
+      q.vx *= 0.965;
+      q.vy *= 0.99;
       q.x += q.vx;
       q.y += q.vy;
-      q.vy -= 0.012; // buoyancy
-      q.vx *= 0.985;
-      q.vy *= 0.985;
-      q.r += 0.46;
-      q.life -= 0.017;
+      q.life -= q.decay;
       if (q.life <= 0) {
-        this.mist.splice(i, 1);
+        this.droplets.splice(i, 1);
         continue;
       }
-      const rg = m.createRadialGradient(q.x, q.y, 0, q.x, q.y, q.r);
-      rg.addColorStop(0, `rgba(${q.h},${(q.a * q.life).toFixed(3)})`);
-      rg.addColorStop(1, `rgba(${q.h},0)`);
-      m.fillStyle = rg;
-      m.beginPath();
-      m.arc(q.x, q.y, q.r, 0, TAU);
-      m.fill();
+      // Held at full strength and cut at the end: a drop of paint does not
+      // dissolve on the way, it simply stops being in shot.
+      const a = q.a * Math.min(1, q.life * 2.4);
+      const speed = Math.hypot(q.vx, q.vy);
+      if (speed > 1.1) {
+        // Fast enough to smear across the frame, which is most of what sells
+        // liquid over vapour.
+        m.strokeStyle = `rgba(${q.h},${a.toFixed(3)})`;
+        m.lineWidth = q.r * 1.7;
+        m.beginPath();
+        m.moveTo(q.x - q.vx * 2.4, q.y - q.vy * 2.4);
+        m.lineTo(q.x, q.y);
+        m.stroke();
+      } else {
+        m.fillStyle = `rgba(${q.h},${a.toFixed(3)})`;
+        m.beginPath();
+        m.arc(q.x, q.y, q.r, 0, TAU);
+        m.fill();
+      }
     }
 
-    if (this.ptr.down && !done) {
-      const r = this.radius * 2.2;
-      const hues = ART.hues;
-      const rg = m.createRadialGradient(this.can.x, this.can.y, 0, this.can.x, this.can.y, r);
-      rg.addColorStop(0, `rgba(${hues[0]},0.26)`);
-      rg.addColorStop(0.4, `rgba(${hues[1] || hues[0]},0.12)`);
-      rg.addColorStop(1, `rgba(${hues[1] || hues[0]},0)`);
-      m.fillStyle = rg;
+    if (this.ptr.down && !done) this.drawJet(m);
+  }
+
+  /**
+   * The paint leaving the nozzle, seen head on: strands firing out of the
+   * centre and tearing apart as they go, redrawn from scratch every frame.
+   *
+   * Deliberately not a radial gradient. A soft disc around the nozzle is what
+   * makes a spray read as smoke however tightly it is drawn — the eye needs
+   * *filaments* to call it liquid.
+   */
+  private drawJet(m: CanvasRenderingContext2D): void {
+    const R = this.radius;
+    const cx = this.can.x;
+    const cy = this.can.y;
+    const hues = ART.hues;
+
+    // Lag: airborne paint keeps the nozzle's old position for a moment, so the
+    // whole stream smears opposite the travel.
+    const lagX = -this.canVx * 1.1;
+    const lagY = -this.canVy * 1.1;
+
+    const strands = 26 + ((Math.random() * 10) | 0);
+    for (let i = 0; i < strands; i++) {
+      const ang = Math.random() * TAU;
+      const cos = Math.cos(ang);
+      const sin = Math.sin(ang);
+      // Nothing sprays down through the can it just came out of: the further a
+      // strand points into the body, the less likely it is to be drawn.
+      if (sin > 0.3 && Math.random() < sin) continue;
+      // Long thin ones among short fat ones, so the jet has some grain to it.
+      const thin = Math.random() < 0.6;
+      const r0 = R * (0.04 + Math.random() * 0.2);
+      const r1 = r0 + R * (thin ? 0.45 + Math.random() * 0.95 : 0.2 + Math.random() * 0.45);
+      const x0 = cx + cos * r0;
+      const y0 = cy + sin * r0;
+      const x1 = cx + cos * r1 + lagX;
+      const y1 = cy + sin * r1 + lagY;
+      // A quarter of the stream catches the light as wet highlight.
+      const h = Math.random() < 0.25 ? '255,190,238' : hues[(Math.random() * hues.length) | 0];
+      const a = (thin ? 0.34 : 0.5) + Math.random() * 0.34;
+      // Each strand thins out along its length rather than ending on a hard
+      // stop, which is how a stream of paint actually breaks into droplets.
+      const g = m.createLinearGradient(x0, y0, x1, y1);
+      g.addColorStop(0, `rgba(${h},${a.toFixed(3)})`);
+      g.addColorStop(0.65, `rgba(${h},${(a * 0.5).toFixed(3)})`);
+      g.addColorStop(1, `rgba(${h},0)`);
+      m.strokeStyle = g;
+      m.lineWidth = thin ? 0.8 + Math.random() * 1.5 : 2.2 + Math.random() * 2.6;
+      // Bowed, not ruled: a torn thread of paint never leaves straight.
+      const bow = (Math.random() - 0.5) * (r1 - r0) * 0.4;
       m.beginPath();
-      m.arc(this.can.x, this.can.y, r, 0, TAU);
-      m.fill();
+      m.moveTo(x0, y0);
+      m.quadraticCurveTo((x0 + x1) / 2 - sin * bow, (y0 + y1) / 2 + cos * bow, x1, y1);
+      m.stroke();
     }
+
+    // Wet core where the stream leaves the can.
+    m.fillStyle = `rgba(${hues[0]},0.5)`;
+    m.beginPath();
+    m.arc(cx, cy, R * 0.09, 0, TAU);
+    m.fill();
   }
 
   // -------------------------------------------------------------------- audio

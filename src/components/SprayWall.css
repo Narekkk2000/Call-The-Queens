@@ -67,8 +67,9 @@
   pointer-events: none;
 }
 
+/* Deliberately not `screen`: additive blending makes airborne paint glow
+   through whatever is behind it, which reads as vapour. Pigment covers. */
 .wall__canvas--mist {
-  mix-blend-mode: screen;
   pointer-events: none;
 }
 
