@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SprayEngine, type SprayConfig } from '../spray/SprayEngine';
 import { RevealScreen } from './RevealScreen';
-import { SprayCan } from './SprayCan';
+import { CAN_VARIANTS, SprayCan, type CanVariant } from './SprayCan';
 import './SprayWall.css';
 
 export type SprayWallProps = Partial<SprayConfig>;
@@ -26,6 +26,9 @@ export function SprayWall(overrides: SprayWallProps) {
   const [muted, setMuted] = useState(false);
   const [progress, setProgress] = useState(0);
   const [hintVisible, setHintVisible] = useState(true);
+  // Which can design is in hand. Swapping it is purely cosmetic — every variant
+  // shares the artwork's footprint, so the engine needs no say in it.
+  const [canVariant, setCanVariant] = useState<CanVariant>('mono');
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const paintRef = useRef<HTMLCanvasElement>(null);
@@ -35,6 +38,7 @@ export function SprayWall(overrides: SprayWallProps) {
   const grainRef = useRef<HTMLCanvasElement>(null);
   const canRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
+  const canTabsRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<SprayEngine | null>(null);
 
   // The engine runs outside React's render cycle, so it reads state through a
@@ -54,6 +58,7 @@ export function SprayWall(overrides: SprayWallProps) {
       grain: grainRef.current,
       can: canRef.current,
       controls: controlsRef.current,
+      canTabs: canTabsRef.current,
     };
     if (Object.values(els).some((el) => el === null)) return;
 
@@ -144,9 +149,32 @@ export function SprayWall(overrides: SprayWallProps) {
         </div>
       )}
 
+      {/* Kept mounted through the reveal so the engine's cached box stays valid;
+          it only has to be out of the way, not gone. */}
+      <div
+        className={`can-tabs${done ? ' can-tabs--hidden' : ''}`}
+        ref={canTabsRef}
+        inert={done}
+      >
+        <div className="can-tabs__bar">
+          <span className="can-tabs__label">CAN</span>
+          {CAN_VARIANTS.map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              className={`can-tabs__button${v.id === canVariant ? ' can-tabs__button--active' : ''}`}
+              aria-pressed={v.id === canVariant}
+              onClick={() => setCanVariant(v.id)}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {done && <RevealScreen />}
 
-      <SprayCan ref={canRef} />
+      <SprayCan ref={canRef} variant={canVariant} />
     </div>
   );
 }

@@ -298,6 +298,77 @@
   min-width: 30px;
 }
 
+/* -------------------------------------------------------------- can tabs */
+
+.can-tabs {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 22px;
+  display: flex;
+  justify-content: center;
+  padding: 0 24px;
+  z-index: 16;
+  /* The bar itself takes the clicks; the full-width track must not. */
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+
+.can-tabs--hidden {
+  opacity: 0;
+}
+
+.can-tabs__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  max-width: 100%;
+  padding: 5px 5px 5px 13px;
+  border-radius: 24px;
+  background: rgba(10, 8, 14, 0.62);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  pointer-events: auto;
+}
+
+.can-tabs__label {
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.3em;
+  color: rgba(255, 255, 255, 0.3);
+  padding-right: 5px;
+}
+
+.can-tabs__button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.46);
+  font-family: 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.13em;
+  padding: 8px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.25s ease,
+    color 0.25s ease;
+}
+
+.can-tabs__button:hover,
+.can-tabs__button:focus-visible {
+  color: #ff9ee6;
+}
+
+.can-tabs__button--active,
+.can-tabs__button--active:hover {
+  background: rgba(255, 255, 255, 0.94);
+  color: #0b0a0d;
+}
+
 /* -------------------------------------------------------------------- can */
 
 .can {
@@ -312,6 +383,29 @@
   filter: drop-shadow(0 0 22px rgba(255, 58, 205, 0.5)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.55));
 }
 
+/* Each design carries its own light: raw metal picks up the room, the branded
+   can throws the brand's magenta, chrome throws the wall's violet. */
+.can--mono {
+  filter: drop-shadow(0 0 16px rgba(198, 210, 230, 0.3)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.55));
+}
+
+.can--queens {
+  filter: drop-shadow(0 0 20px rgba(255, 46, 154, 0.45)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.6));
+}
+
+.can--chrome {
+  filter: drop-shadow(0 0 22px rgba(190, 90, 255, 0.45)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.6));
+}
+
+/* A black can needs a wider, cooler halo or it disappears into the wall. */
+.can--midnight {
+  filter: drop-shadow(0 0 26px rgba(150, 140, 190, 0.4)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.65));
+}
+
+.can--vintage {
+  filter: drop-shadow(0 0 16px rgba(255, 214, 170, 0.28)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.6));
+}
+
 .can__svg {
   width: 100%;
   display: block;
@@ -319,6 +413,15 @@
 }
 
 /* ------------------------------------------------------------------ mobile */
+
+/* The meter and the buttons close in on the centre before the phone breakpoint
+   does, so the can tabs move up to their own row early. Five tabs are ~410px
+   wide, which is what sets this threshold. */
+@media (max-width: 1000px) {
+  .can-tabs {
+    bottom: 74px;
+  }
+}
 
 @media (max-width: 700px) {
   /* The headline is nowrap by design; on a narrow stage it has to wrap or it
@@ -363,5 +466,11 @@
   .controls {
     right: 18px;
     bottom: 20px;
+  }
+
+  /* Clear of the meter, which has taken the full width at 78px. */
+  .can-tabs {
+    bottom: 118px;
+    padding: 0 18px;
   }
 }

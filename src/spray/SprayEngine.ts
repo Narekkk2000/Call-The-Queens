@@ -46,6 +46,8 @@ export type SprayElements = {
   can: HTMLDivElement;
   /** The sound/reset cluster — the can gets out of its way. */
   controls: HTMLDivElement;
+  /** The can-design tabs, which need a real cursor for the same reason. */
+  canTabs: HTMLDivElement;
 };
 
 export type SprayHost = {
@@ -149,6 +151,15 @@ const CAN_MAX_TILT = 74;
  * has to scale with the cone or drips thin out on large screens.
  */
 const CELL_PER_RADIUS = 20 / 120;
+/**
+ * Least of the mural's width that may ever be on screen. A plain cover fit is
+ * driven by the short axis, so on a portrait phone it showed only ~27% of the
+ * piece and cut both ends off the skate. The skate spans about half the image,
+ * so hold that much — the shortfall in height is taken up by the edge rows in
+ * `compose`, not by bars.
+ */
+const MIN_MURAL_WIDTH_VISIBLE = 0.5;
+
 /** Downsampled mural resolution used for both the ink map and coverage sampling. */
 const SAMPLE_W = 108;
 const SAMPLE_H = 54;
@@ -228,8 +239,8 @@ export class SprayEngine {
   /** True from the moment the wall is fully revealed until the hold expires. */
   private completing = false;
   private completeTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Controls cluster in wrap-local coordinates, already padded. Null until measured. */
-  private controlsBox: { x0: number; y0: number; x1: number; y1: number } | null = null;
+  /** Control clusters in wrap-local coordinates, already padded. Empty until measured. */
+  private controlsBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
   private sizeCheck = 0;
   private nextRattle = 0;
   private errShown = false;
@@ -406,27 +417,30 @@ export class SprayEngine {
 
   // ---------------------------------------------------------------- proximity
 
-  /** Caches the controls cluster in wrap-local space; it only moves on resize. */
+  /**
+   * Caches each control cluster in wrap-local space; they only move on resize.
+   * Clusters are kept apart rather than merged into one box: they sit at
+   * opposite ends of the bottom edge, and their union would swallow the whole
+   * strip between them.
+   */
   private measureControls(): void {
     const wrap = this.els.wrap.getBoundingClientRect();
-    const box = this.els.controls.getBoundingClientRect();
-    if (!box.width || !box.height) {
-      this.controlsBox = null;
-      return;
-    }
-    this.controlsBox = {
-      x0: box.left - wrap.left - CONTROLS_MARGIN,
-      y0: box.top - wrap.top - CONTROLS_MARGIN,
-      x1: box.right - wrap.left + CONTROLS_MARGIN,
-      y1: box.bottom - wrap.top + CONTROLS_MARGIN,
-    };
+    this.controlsBoxes = [this.els.controls, this.els.canTabs]
+      .map((el) => el.getBoundingClientRect())
+      .filter((box) => box.width > 0 && box.height > 0)
+      .map((box) => ({
+        x0: box.left - wrap.left - CONTROLS_MARGIN,
+        y0: box.top - wrap.top - CONTROLS_MARGIN,
+        x1: box.right - wrap.left + CONTROLS_MARGIN,
+        y1: box.bottom - wrap.top + CONTROLS_MARGIN,
+      }));
   }
 
   /** True when the pointer is close enough to the buttons to want a real cursor. */
   private get nearControls(): boolean {
-    const b = this.controlsBox;
-    if (!b) return false;
-    return this.ptr.x >= b.x0 && this.ptr.x <= b.x1 && this.ptr.y >= b.y0 && this.ptr.y <= b.y1;
+    return this.controlsBoxes.some(
+      (b) => this.ptr.x >= b.x0 && this.ptr.x <= b.x1 && this.ptr.y >= b.y0 && this.ptr.y <= b.y1,
+    );
   }
 
   // ------------------------------------------------------------------- radius
@@ -517,10 +531,10 @@ export class SprayEngine {
   }
 
   /**
-   * The mural is cover-fit, so a wide stage crops its top and bottom away.
-   * Ink outside the wall can never be sprayed, and counting it would quietly
-   * make wide screens demand a larger share of the *visible* artwork. Restrict
-   * the denominator to what is actually on screen.
+   * The mural is still cropped on stages far from its own aspect, so ink can
+   * sit outside the wall where it can never be sprayed. Counting it would
+   * quietly make those stages demand a larger share of the *visible* artwork.
+   * Restrict the denominator to what is actually on screen.
    */
   private markReachableInk(): void {
     if (!this.ink || !this.mw || !this.mh) {
@@ -599,7 +613,12 @@ export class SprayEngine {
 
     const aw = this.mural?.naturalWidth || 1920;
     const ah = this.mural?.naturalHeight || 1080;
-    const s = Math.max(this.W / aw, this.wallH / ah); // cover-fit
+    // Cover fit, but never cropped so hard that the subject is lost: on a
+    // portrait stage the height drives the scale and the piece gets squeezed
+    // out sideways, so back the scale off until enough of its width is on
+    // screen. Landscape stages are unaffected — the cap never binds there.
+    const cover = Math.max(this.W / aw, this.wallH / ah);
+    const s = Math.min(cover, this.W / (MIN_MURAL_WIDTH_VISIBLE * aw));
     this.mw = aw * s;
     this.mh = ah * s;
     this.mx = (this.W - this.mw) / 2;
@@ -1243,7 +1262,37 @@ export class SprayEngine {
       p.globalCompositeOperation = 'source-in';
       p.imageSmoothingEnabled = true;
       p.imageSmoothingQuality = 'high';
+      // Where the capped fit leaves the mural short of the wall, its own top
+      // and bottom rows are stretched into the gap: the piece runs off the edge
+      // in its own colours instead of stopping on a line, and a pass up there
+      // still lays paint. The first draw has to cover the whole wall — anything
+      // `source-in` misses is cleared — so the top row lays the ground.
+      const sw = this.muralSoft.width;
+      const sh = this.muralSoft.height;
+      p.drawImage(this.muralSoft, 0, 0, sw, 1, this.mx, 0, this.mw, wallH);
+      p.globalCompositeOperation = 'source-atop';
+      const foot = this.my + this.mh;
+      if (foot < wallH) {
+        p.drawImage(this.muralSoft, 0, sh - 1, sw, 1, this.mx, foot, this.mw, wallH - foot);
+      }
+      // The wet coat, in register with the detail coat that follows.
       p.drawImage(this.muralSoft, this.mx, this.my, this.mw, this.mh);
+      // Sink the stretched rows into shadow toward the edges, so they read as
+      // the piece falling off into the dark rather than as smeared pixels.
+      if (this.my > 0) {
+        const top = p.createLinearGradient(0, 0, 0, this.my);
+        top.addColorStop(0, 'rgba(0,0,0,0.92)');
+        top.addColorStop(1, 'rgba(0,0,0,0)');
+        p.fillStyle = top;
+        p.fillRect(0, 0, W, this.my);
+      }
+      if (foot < wallH) {
+        const bottom = p.createLinearGradient(0, foot, 0, wallH);
+        bottom.addColorStop(0, 'rgba(0,0,0,0)');
+        bottom.addColorStop(1, 'rgba(0,0,0,0.92)');
+        p.fillStyle = bottom;
+        p.fillRect(0, foot, W, wallH - foot);
+      }
       p.globalCompositeOperation = 'source-over';
     }
 
