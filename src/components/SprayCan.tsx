@@ -527,17 +527,25 @@ function ChromeArt() {
         {/* neon bouncing off the floor */}
         <rect x="28" y="378" width="144" height="2" fill="#ff86d2" fillOpacity="0.3" />
 
+        {/* The mirror swings from near-black to near-white across the body, so a
+            flat white wordmark dissolves into the light bands. A dark halo under
+            a solid white face carries it over every band — and reads as type
+            etched into chrome rather than printed on it. */}
         <text
           transform="rotate(-90 100 192)"
           x="100"
           y="192"
           textAnchor="middle"
           fontFamily="'Space Mono', monospace"
-          fontSize="9.5"
+          fontSize="10.5"
           fontWeight="700"
           letterSpacing="6"
           fill="#ffffff"
-          fillOpacity="0.5"
+          stroke="#080b12"
+          strokeOpacity="0.66"
+          strokeWidth="2.6"
+          strokeLinejoin="round"
+          paintOrder="stroke"
         >
           CALL THE QUEENS
         </text>
