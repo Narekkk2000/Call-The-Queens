@@ -40,6 +40,10 @@ export type SprayElements = {
   wrap: HTMLDivElement;
   paint: HTMLCanvasElement;
   glow: HTMLCanvasElement;
+  /** Specular sheen on paint that has not dried yet. */
+  wet: HTMLCanvasElement;
+  /** Soft light travelling with the can, lighting the wall's tooth. */
+  lamp: HTMLDivElement;
   mist: HTMLCanvasElement;
   floor: HTMLCanvasElement;
   grain: HTMLCanvasElement;
@@ -185,6 +189,14 @@ const CELL_PER_RADIUS = 20 / 120;
  * the single value that decides which one the spray reads as.
  */
 const DROPLET_GRAVITY = 0.08;
+/** Resolution of the wetness buffer, as a fraction of the wall. */
+const WET_SCALE = 0.34;
+/**
+ * Seconds for wet paint to look dry. Aerosol enamel is touch-dry in minutes,
+ * but the point of the sheen is to tell you where you just sprayed — much
+ * longer than this and the whole wall shines at once, which tells you nothing.
+ */
+const DRY_SECONDS = 2;
 /**
  * Least of the mural's width that may ever be on screen. A plain cover fit is
  * driven by the short axis, so on a portrait phone it showed only ~27% of the
@@ -215,6 +227,14 @@ export class SprayEngine {
   private readonly sample = document.createElement('canvas');
   private readonly fink = document.createElement('canvas');
   private readonly glowSmall = document.createElement('canvas');
+  /**
+   * How wet the paint is, everywhere, at a fraction of the wall's resolution.
+   * Alpha is wetness: a stamp writes 1, and the whole buffer is faded down every
+   * frame, so the newest paint is the brightest and everything else is drying.
+   * Kept as a buffer rather than per-cell values because a grid of cells shows
+   * as a grid of squares however hard it is blurred.
+   */
+  private readonly wetMap = document.createElement('canvas');
   /** Low-res, saturation-boosted mural — the wet colour a fresh pass lays down. */
   private readonly muralSoft = document.createElement('canvas');
   /** Sharp mural masked by coverage squared, so detail only resolves in thick paint. */
@@ -230,6 +250,8 @@ export class SprayEngine {
   private maskCtx: CanvasRenderingContext2D | null = null;
   private finkCtx: CanvasRenderingContext2D | null = null;
   private gsctx: CanvasRenderingContext2D | null = null;
+  private wctx: CanvasRenderingContext2D | null = null;
+  private wetCtx: CanvasRenderingContext2D | null = null;
 
   // Geometry.
   private W = 0;
@@ -267,6 +289,11 @@ export class SprayEngine {
   private can = { x: 0, y: 0, rot: 10, tx: 0, ty: 0 };
   private lastStamp: { x: number; y: number } | null = null;
   private dirty = true;
+  /** How wet the wettest paint on the wall is, 0..1 — lets the pass be skipped. */
+  private wetLevel = 0;
+  private wetBlank = true;
+  private lampOpacity = 0;
+  private lastFrame = 0;
   private engaged = false;
   private sprayed = false;
   private finishing = false;
@@ -354,6 +381,8 @@ export class SprayEngine {
       this.finkCtx.restore();
     }
     if (this.cols) this.dens = new Float32Array(this.cols * this.rows);
+    // A cleared wall is a dry wall; leaving the sheen up would shine on nothing.
+    this.wetLevel = 0;
     this.sprayed = false;
     this.finishing = false;
     this.floodT = 0;
@@ -635,6 +664,7 @@ export class SprayEngine {
 
     this.pctx = fit(this.els.paint, this.W, this.wallH);
     this.gctx = fit(this.els.glow, this.W, this.wallH);
+    this.wctx = fit(this.els.wet, this.W, this.wallH);
     this.mctx = fit(this.els.mist, this.W, this.H);
     this.fctx = fit(this.els.floor, this.W, this.floorH);
     this.maskCtx = fit(this.mask, this.W, this.wallH);
@@ -654,6 +684,12 @@ export class SprayEngine {
     this.glowSmall.width = Math.max(2, Math.round(this.W * 0.22));
     this.glowSmall.height = Math.max(2, Math.round(this.wallH * 0.22));
     this.gsctx = this.glowSmall.getContext('2d');
+
+    // Wetness is a soft, slow-moving field, so it costs nothing to hold it at a
+    // third of the wall's size and blur it back up.
+    this.wetMap.width = Math.max(2, Math.round(this.W * WET_SCALE));
+    this.wetMap.height = Math.max(2, Math.round(this.wallH * WET_SCALE));
+    this.wetCtx = this.wetMap.getContext('2d');
 
     const aw = this.mural?.naturalWidth || 1920;
     const ah = this.mural?.naturalHeight || 1080;
@@ -907,6 +943,25 @@ export class SprayEngine {
     }
     m.restore();
 
+    // Mark the paint as freshly wet. Written at the same moment as the pigment
+    // so the sheen sits exactly on the stroke, not near it.
+    const wc = this.wetCtx;
+    if (wc) {
+      const wr = r * WET_SCALE * 1.15;
+      const wx = x * WET_SCALE;
+      const wy = y * WET_SCALE;
+      const grad = wc.createRadialGradient(wx, wy, 0, wx, wy, Math.max(1, wr));
+      grad.addColorStop(0, `rgba(255,255,255,${(0.5 * strength).toFixed(3)})`);
+      grad.addColorStop(0.55, `rgba(255,255,255,${(0.26 * strength).toFixed(3)})`);
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      wc.fillStyle = grad;
+      wc.beginPath();
+      wc.arc(wx, wy, Math.max(1, wr), 0, TAU);
+      wc.fill();
+      this.wetLevel = 1;
+      this.wetBlank = false;
+    }
+
     // Track paint build-up per cell; saturated cells start to run.
     const ci = Math.floor(x / this.cell);
     const ri = Math.floor(y / this.cell);
@@ -1082,6 +1137,11 @@ export class SprayEngine {
     const done = this.host.isDone();
     const W = this.W;
     const wallH = this.wallH;
+    // Real elapsed time, so paint dries on the clock rather than on the frame
+    // count — a throttled tab would otherwise keep the wall wet for minutes.
+    // The cap only guards against the jump back from a long background pause.
+    const dt = this.lastFrame ? Math.min(1, (now - this.lastFrame) / 1000) : 0.016;
+    this.lastFrame = now;
 
     // The can chases the pointer with easing, and tilts into its own velocity.
     if (this.engaged) {
@@ -1173,8 +1233,87 @@ export class SprayEngine {
       this.dirty = false;
     }
 
+    this.drawWet(dt);
+    this.placeLamp(done);
+
     this.els.glow.style.opacity = done ? (0.62 + Math.sin(now / 900) * 0.16).toFixed(3) : '0.5';
     this.drawAirborne(done, now);
+  }
+
+  /**
+   * The wet look. Fresh paint is still holding solvent, so it throws a specular
+   * highlight; as it flashes off the sheen goes with it and the colour settles
+   * matte. Two things make it read as wet rather than as another glow: it is
+   * clipped to the pigment, so bare wall never shines, and it decays
+   * exponentially, so the newest stroke is always the brightest thing on the
+   * wall no matter how much paint is already up.
+   */
+  private drawWet(dt: number): void {
+    const w = this.wctx;
+    const wc = this.wetCtx;
+    if (!w || !wc) return;
+
+    // Flash-off. Removing a fixed *share* of what is left each second gives the
+    // exponential fade solvent actually has; a linear countdown reads as a
+    // light being switched off.
+    const tau = DRY_SECONDS / 3;
+    const fade = 1 - Math.exp(-dt / tau);
+    this.wetLevel *= Math.exp(-dt / tau);
+
+    if (this.wetLevel < 0.005) {
+      // Dry. Clear once, then stop paying for the pass until the next stroke.
+      if (!this.wetBlank) {
+        wc.save();
+        wc.setTransform(1, 0, 0, 1, 0, 0);
+        wc.clearRect(0, 0, this.wetMap.width, this.wetMap.height);
+        wc.restore();
+        w.save();
+        w.setTransform(1, 0, 0, 1, 0, 0);
+        w.clearRect(0, 0, this.els.wet.width, this.els.wet.height);
+        w.restore();
+        this.wetBlank = true;
+      }
+      return;
+    }
+
+    wc.globalCompositeOperation = 'destination-out';
+    wc.fillStyle = `rgba(0,0,0,${fade.toFixed(4)})`;
+    wc.fillRect(0, 0, this.wetMap.width, this.wetMap.height);
+    wc.globalCompositeOperation = 'source-over';
+
+    w.save();
+    w.setTransform(1, 0, 0, 1, 0, 0);
+    w.clearRect(0, 0, this.els.wet.width, this.els.wet.height);
+    w.restore();
+
+    w.filter = 'blur(4px)';
+    w.drawImage(this.wetMap, 0, 0, this.W, this.wallH);
+    w.filter = 'none';
+
+    // Only pigment shines. Without this the sheen sits on bare concrete too and
+    // the whole thing reads as a torch rather than as wet paint.
+    w.globalCompositeOperation = 'destination-in';
+    w.drawImage(this.els.paint, 0, 0, this.W, this.wallH);
+    w.globalCompositeOperation = 'source-over';
+  }
+
+  /**
+   * Moves the can's light. It is a plain element rather than another canvas
+   * because all it does is travel — the wall's tooth, seams and grain are
+   * already drawn, and a soft-light blend over them lifts that texture into
+   * relief far more cheaply than relighting it per pixel would.
+   */
+  private placeLamp(done: boolean): void {
+    const l = this.els.lamp.style;
+    // Sits a little above the nozzle: the light source is the can in your hand,
+    // not the jet leaving it.
+    l.transform = `translate3d(${(this.can.x - this.W / 2).toFixed(1)}px, ${(this.can.y - 26 - this.wallH / 2).toFixed(1)}px, 0)`;
+    // Brightest while spraying, dim while the can is just being carried, gone
+    // once the wall is finished and the flood takes over.
+    const want = done ? 0 : this.ptr.down ? 1 : this.engaged ? 0.62 : 0.34;
+    const have = this.lampOpacity;
+    this.lampOpacity = have + (want - have) * 0.12;
+    l.opacity = this.lampOpacity.toFixed(3);
   }
 
   /** Advances wall drips, painting them straight into the reveal mask. */

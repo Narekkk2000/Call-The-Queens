@@ -40,6 +40,8 @@ export function SprayWall(overrides: SprayWallProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const paintRef = useRef<HTMLCanvasElement>(null);
   const glowRef = useRef<HTMLCanvasElement>(null);
+  const wetRef = useRef<HTMLCanvasElement>(null);
+  const lampRef = useRef<HTMLDivElement>(null);
   const mistRef = useRef<HTMLCanvasElement>(null);
   const floorRef = useRef<HTMLCanvasElement>(null);
   const grainRef = useRef<HTMLCanvasElement>(null);
@@ -60,6 +62,8 @@ export function SprayWall(overrides: SprayWallProps) {
       wrap: wrapRef.current,
       paint: paintRef.current,
       glow: glowRef.current,
+      wet: wetRef.current,
+      lamp: lampRef.current,
       mist: mistRef.current,
       floor: floorRef.current,
       grain: grainRef.current,
@@ -109,6 +113,12 @@ export function SprayWall(overrides: SprayWallProps) {
         <div className="wall__course-line" />
         <canvas className="wall__canvas" ref={paintRef} />
         <canvas className="wall__canvas wall__canvas--glow" ref={glowRef} />
+        {/* Sheen on paint that has not dried yet. Above the colour so it reads
+            as a highlight on the surface, below the light so the light rakes
+            both. */}
+        <canvas className="wall__canvas wall__canvas--wet" ref={wetRef} />
+        {/* The can's own light, travelling with it. */}
+        <div className="wall__lamp" ref={lampRef} aria-hidden="true" />
         <div className="wall__vignette" />
         <div className="wall__base-shadow" />
       </div>

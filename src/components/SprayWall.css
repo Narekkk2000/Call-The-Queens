@@ -61,6 +61,38 @@
   filter: blur(1px);
 }
 
+/* Wet paint. `screen` because a specular highlight adds light to whatever is
+   under it — `overlay` would tint the sheen with the colour it is sitting on,
+   and wet paint reflects the room, not itself. */
+.wall__canvas--wet {
+  mix-blend-mode: screen;
+  opacity: 0.5;
+}
+
+/* The can's light. Two stops rather than one so it has a hot centre and a long
+   falloff; `soft-light` lifts the wall's tooth into relief instead of washing a
+   flat white circle over it. */
+.wall__lamp {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 62vmax;
+  height: 62vmax;
+  margin: -31vmax 0 0 -31vmax;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  mix-blend-mode: soft-light;
+  background: radial-gradient(
+    closest-side,
+    rgba(255, 246, 250, 0.85),
+    rgba(255, 235, 248, 0.34) 26%,
+    rgba(255, 210, 240, 0.12) 52%,
+    rgba(0, 0, 0, 0) 76%
+  );
+  will-change: transform, opacity;
+}
+
 .wall__canvas--grain {
   mix-blend-mode: overlay;
   opacity: 0.55;
