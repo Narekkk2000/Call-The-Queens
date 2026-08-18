@@ -10,17 +10,6 @@ const BLOBS = [
   { left: '62%', top: '18%', size: '13vmax', duration: '.5s', delay: '.22s' },
 ];
 
-/** Runs of paint hanging from the top edge once the flood settles. */
-const FLOOD_DRIPS = [
-  { left: '11%', width: 7, height: 74, radius: '0 0 5px 5px', duration: '1.5s', delay: '.8s' },
-  { left: '29%', width: 5, height: 40, radius: '0 0 5px 5px', duration: '1.3s', delay: '1s' },
-  { left: '57%', width: 9, height: 104, radius: '0 0 6px 6px', duration: '1.8s', delay: '.92s' },
-  { left: '73%', width: 6, height: 56, radius: '0 0 5px 5px', duration: '1.45s', delay: '1.12s' },
-  { left: '90%', width: 4, height: 32, radius: '0 0 4px 4px', duration: '1.25s', delay: '1.3s' },
-];
-
-const DRIP_EASE = 'cubic-bezier(.3,.7,.2,1)';
-
 /**
  * Shown once the wall is fully revealed: the paint flood, the hero lockup and
  * the scrollable contact panel.
@@ -87,19 +76,6 @@ export function RevealScreen() {
           <div className="flood__dots" />
           <div className="flood__vignette" />
           <div className="flood__sheen" />
-          {FLOOD_DRIPS.map((d) => (
-            <div
-              key={d.left}
-              className="flood__drip"
-              style={{
-                left: d.left,
-                width: d.width,
-                height: d.height,
-                borderRadius: d.radius,
-                animation: `ctqDripGrow ${d.duration} ${d.delay} ${DRIP_EASE} both`,
-              }}
-            />
-          ))}
         </div>
       </div>
 
@@ -136,26 +112,6 @@ export function RevealScreen() {
 
           <div className="hero__slab" aria-hidden="true">
             <div className="hero__slab-bar" />
-            <div
-              className="hero__slab-drip"
-              style={{
-                left: '34%',
-                width: 4,
-                height: 22,
-                borderRadius: '0 0 4px 4px',
-                animation: `ctqDripGrow 1.3s 1.8s ${DRIP_EASE} both`,
-              }}
-            />
-            <div
-              className="hero__slab-drip"
-              style={{
-                left: '64%',
-                width: 3,
-                height: 14,
-                borderRadius: '0 0 4px 4px',
-                animation: `ctqDripGrow 1.2s 2s ${DRIP_EASE} both`,
-              }}
-            />
           </div>
 
           <div className="hero__tagline">{site.tagline}</div>

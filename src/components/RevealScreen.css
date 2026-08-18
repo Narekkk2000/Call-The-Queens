@@ -50,13 +50,6 @@
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0));
 }
 
-.flood__drip {
-  position: absolute;
-  top: 0;
-  background: linear-gradient(180deg, #7d0596, rgba(125, 5, 150, 0));
-  transform-origin: top center;
-}
-
 /* --------------------------------------------------------------- end panel */
 
 .reveal {
@@ -209,13 +202,6 @@
   background: linear-gradient(90deg, rgba(255, 255, 255, 0), #fff 22%, #fff 78%, rgba(255, 255, 255, 0));
   transform-origin: center;
   animation: ctqSlab 0.9s 1.3s cubic-bezier(0.2, 0.9, 0.2, 1) both;
-}
-
-.hero__slab-drip {
-  position: absolute;
-  top: 4px;
-  background: linear-gradient(180deg, #fff, rgba(255, 255, 255, 0));
-  transform-origin: top center;
 }
 
 .hero__tagline {
