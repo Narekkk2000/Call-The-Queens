@@ -27,12 +27,43 @@
   animation: ctqFade 0.7s 0.62s ease both;
 }
 
+/* Deep violet, brought up by how far down the panel you have scrolled. A second
+   flat layer rather than an interpolated colour, so it works in every browser
+   and costs one composite. */
+.flood__dusk {
+  position: absolute;
+  inset: 0;
+  background: #35084d;
+  opacity: var(--ctq-travel, 0);
+}
+
+/* Halftone. Two screens at the same pitch, offset from each other and pulling in
+   opposite directions — light dots and dark dots slightly out of register is
+   what separates a printed flat from a CSS one. */
 .flood__dots {
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.2) 1.4px, rgba(255, 255, 255, 0) 1.5px);
-  background-size: 15px 15px;
-  opacity: 0.45;
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.2) 1.05px, rgba(255, 255, 255, 0) 1.15px),
+    radial-gradient(rgba(24, 0, 34, 0.22) 0.95px, rgba(24, 0, 34, 0) 1.05px);
+  background-size:
+    9px 9px,
+    9px 9px;
+  background-position:
+    0 0,
+    4px 5px;
+  opacity: 0.55;
+}
+
+/* Paper tooth. Generated noise rather than an image file so it costs nothing to
+   ship, tiled at a size where the grain reads without the tile repeat showing. */
+.flood__grain {
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  mix-blend-mode: overlay;
+  opacity: 0.16;
 }
 
 .flood__vignette {
@@ -99,18 +130,26 @@
   transform: skewX(-7deg);
 }
 
-/* --------------------------------------------------------------- hero copy */
+/* ------------------------------------------------------------- corner mark */
 
-.hero__logo {
+/* Above the scrolling panel and outside it, so it keeps the corner while the
+   page moves under it. Scaled from the top left, which is the one origin that
+   keeps the mark pinned to its corner as it shrinks. */
+.mark {
   position: absolute;
+  z-index: 16;
   top: clamp(16px, 3vh, 40px);
   left: clamp(16px, 3.5vw, 52px);
   width: clamp(96px, 13vw, 210px);
   height: auto;
+  transform-origin: top left;
+  transform: scale(calc(1 - 0.46 * var(--ctq-travel, 0)));
   /* Fades in with the eyebrow rules rather than popping in on mount. */
   animation: ctqFade 0.9s 0.7s ease both;
   pointer-events: none;
 }
+
+/* --------------------------------------------------------------- hero copy */
 
 .hero__eyebrow {
   display: flex;

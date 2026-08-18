@@ -25,6 +25,18 @@ export function RevealScreen() {
     if (!root) return;
 
     let raf = 0;
+    // How far down the panel we are, 0..1. Published as a custom property
+    // rather than as React state — it changes on every scroll frame, and
+    // re-rendering the panel for a colour would be a waste. It goes on the root
+    // element because the layers that read it (the flood behind, the wordmark
+    // above) are outside this scroll container, so inheriting it from here
+    // would not reach them.
+    const travel = () => {
+      const range = root.scrollHeight - root.clientHeight;
+      const t = range > 0 ? Math.min(1, Math.max(0, root.scrollTop / range)) : 0;
+      document.documentElement.style.setProperty('--ctq-travel', t.toFixed(4));
+    };
+
     const check = () => {
       const bottom = root.getBoundingClientRect().bottom;
       root.querySelectorAll<HTMLElement>('[data-reveal]').forEach((el) => {
@@ -36,11 +48,13 @@ export function RevealScreen() {
       if (raf) return;
       raf = requestAnimationFrame(() => {
         raf = 0;
+        travel();
         check();
       });
     };
 
     root.addEventListener('scroll', onScroll, { passive: true });
+    travel();
     check();
     // Re-check after layout settles and after the flood animation finishes.
     const t1 = setTimeout(check, 120);
@@ -51,6 +65,7 @@ export function RevealScreen() {
       if (raf) cancelAnimationFrame(raf);
       clearTimeout(t1);
       clearTimeout(t2);
+      document.documentElement.style.removeProperty('--ctq-travel');
     };
   }, []);
 
@@ -72,8 +87,12 @@ export function RevealScreen() {
           />
         ))}
         <div className="flood__sheet" />
+        {/* Dusk. Sits over the magenta and under the print texture, so the paper
+            keeps its dots and grain the whole way down. */}
+        <div className="flood__dusk" />
         <div className="flood__texture">
           <div className="flood__dots" />
+          <div className="flood__grain" />
           <div className="flood__vignette" />
           <div className="flood__sheen" />
         </div>
@@ -81,8 +100,6 @@ export function RevealScreen() {
 
       <div className="reveal" ref={rootRef}>
         <section className="reveal__section reveal__section--hero">
-          <img className="hero__logo" src={assetUrl(site.logo)} alt={site.brand} />
-
           <div className="hero__eyebrow">
             <div className="hero__eyebrow-rule hero__eyebrow-rule--left" />
             <div className="eyebrow-text">{site.brand}</div>
@@ -193,6 +210,10 @@ export function RevealScreen() {
           </div>
         </section>
       </div>
+
+      {/* Outside the scrolling panel on purpose: it holds the corner and shrinks
+          as you travel, rather than sliding away with the hero. */}
+      <img className="mark" src={assetUrl(site.logo)} alt={site.brand} />
     </>
   );
 }
