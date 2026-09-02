@@ -1,4 +1,4 @@
-import { ART, artUrl } from './art';
+import { artUrl, type Art } from './art';
 
 export type SprayConfig = {
   /**
@@ -56,6 +56,8 @@ export type SprayElements = {
 
 export type SprayHost = {
   getConfig(): SprayConfig;
+  /** The mural for the can currently in hand — its src, mist hues and drip colour. */
+  getArt(): Art;
   isDone(): boolean;
   isMuted(): boolean;
   /** The wall finished flooding — reveal the end screen. */
@@ -271,6 +273,8 @@ export class SprayEngine {
 
   // Art.
   private mural: HTMLImageElement | null = null;
+  /** src of the mural currently loaded, so a can swap only reloads on a change. */
+  private muralSrc = '';
   private ink: Uint8Array | null = null;
   /** Ink that currently falls inside the wall — the reveal denominator. */
   private reachable: Uint8Array | null = null;
@@ -545,20 +549,34 @@ export class SprayEngine {
 
   // ---------------------------------------------------------------------- art
 
+  /**
+   * Loads the current can's mural, if it is not already up. The freshly loaded
+   * image is only swapped in on `load`, so the wall keeps showing the old piece
+   * until the new one is ready rather than blanking during the swap.
+   */
   private loadArt(): void {
+    const { src } = this.host.getArt();
+    if (src === this.muralSrc && this.mural) return;
+    this.muralSrc = src;
+
     const img = new Image();
-    img.src = artUrl(ART.src);
-    this.mural = img;
+    img.src = artUrl(src);
 
     const apply = () => {
-      // The mural can resolve after an unmount; geometry would be gone.
-      if (this.destroyed) return;
+      // The mural can resolve after an unmount, or after a further can swap.
+      if (this.destroyed || this.host.getArt().src !== src) return;
+      this.mural = img;
       this.buildInkMap();
       if (this.W) this.resize();
       this.dirty = true;
     };
     if (img.complete && img.naturalWidth) apply();
     else img.addEventListener('load', apply, { once: true });
+  }
+
+  /** Called by React after the can design changes, so the mural follows it. */
+  refreshArt(): void {
+    this.loadArt();
   }
 
   /**
@@ -1024,7 +1042,7 @@ export class SprayEngine {
     // Spatter thrown off the cone. It leaves fast in every direction, carries a
     // little of the stroke's own travel, and then falls — paint coming off a
     // nozzle, not exhaust.
-    const hues = ART.hues;
+    const hues = this.host.getArt().hues;
     const dragX = last ? nx - last.x : 0;
     const dragY = last ? ny - last.y : 0;
     for (let i = 0; i < (radius > 80 ? 16 : 11); i++) {
@@ -1354,7 +1372,7 @@ export class SprayEngine {
 
   /** Reads the mural colour at the foot of the wall so drips match the art. */
   private paintColorAt(x: number): string {
-    const fallback = ART.splat;
+    const fallback = this.host.getArt().splat;
     if (!this.pctx) return fallback;
     try {
       const px = Math.max(0, Math.min(this.els.paint.width - 1, Math.round(x * this.dpr)));
@@ -1565,7 +1583,7 @@ export class SprayEngine {
   private drawInFlight(m: CanvasRenderingContext2D, now: number): void {
     const delay = this.host.getConfig().sprayDelay;
     if (delay <= 0) return;
-    const hues = ART.hues;
+    const hues = this.host.getArt().hues;
     const tail = hues[1] || hues[0];
     // Only the most recent packets matter visually, and this bounds the cost.
     const from = Math.max(0, this.pending.length - 90);
@@ -1654,7 +1672,7 @@ export class SprayEngine {
     const R = this.radius;
     const cx = this.can.x;
     const cy = this.can.y;
-    const hues = ART.hues;
+    const hues = this.host.getArt().hues;
 
     // Lag: airborne paint keeps the nozzle's old position for a moment, so the
     // whole stream smears opposite the travel.

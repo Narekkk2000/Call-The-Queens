@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SprayEngine, type SprayConfig } from '../spray/SprayEngine';
+import { ART, artUrl } from '../spray/art';
 import { RevealScreen } from './RevealScreen';
 import { CAN_VARIANTS, SprayCan, type CanVariant } from './SprayCan';
 import './SprayWall.css';
@@ -33,8 +34,8 @@ export function SprayWall(overrides: SprayWallProps) {
   const [muted, setMuted] = useState(false);
   const [progress, setProgress] = useState(0);
   const [hintVisible, setHintVisible] = useState(true);
-  // Which can design is in hand. Swapping it is purely cosmetic — every variant
-  // shares the artwork's footprint, so the engine needs no say in it.
+  // Which can design is in hand. Each carries its own mural, so a swap changes
+  // both the piece being revealed and the paint that reveals it.
   const [canVariant, setCanVariant] = useState<CanVariant>('mono');
 
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -52,9 +53,10 @@ export function SprayWall(overrides: SprayWallProps) {
 
   // The engine runs outside React's render cycle, so it reads state through a
   // ref that is kept current on every commit.
-  const latest = useRef({ done, muted, config: { ...DEFAULTS, ...overrides } });
+  const latest = useRef({ done, muted, art: ART[canVariant], config: { ...DEFAULTS, ...overrides } });
   latest.current.done = done;
   latest.current.muted = muted;
+  latest.current.art = ART[canVariant];
   latest.current.config = { ...DEFAULTS, ...overrides };
 
   useEffect(() => {
@@ -77,6 +79,7 @@ export function SprayWall(overrides: SprayWallProps) {
       els as Required<{ [K in keyof typeof els]: NonNullable<(typeof els)[K]> }>,
       {
         getConfig: () => latest.current.config,
+        getArt: () => latest.current.art,
         isDone: () => latest.current.done,
         isMuted: () => latest.current.muted,
         onComplete: () => setDone(true),
@@ -98,6 +101,11 @@ export function SprayWall(overrides: SprayWallProps) {
   useEffect(() => {
     engineRef.current?.syncState();
   }, [done, muted]);
+
+  // Load the new can's mural when the design changes.
+  useEffect(() => {
+    engineRef.current?.refreshArt();
+  }, [canVariant]);
 
   const handleReset = useCallback(() => {
     engineRef.current?.clearWall();
@@ -183,7 +191,9 @@ export function SprayWall(overrides: SprayWallProps) {
               aria-pressed={v.id === canVariant}
               onClick={() => setCanVariant(v.id)}
             >
-              {v.label}
+              {/* A peek at the mural this can paints, so the choice is a choice of art. */}
+              <img className="can-tabs__thumb" src={artUrl(ART[v.id].src)} alt="" aria-hidden="true" />
+              <span className="can-tabs__name">{v.label}</span>
             </button>
           ))}
         </div>
