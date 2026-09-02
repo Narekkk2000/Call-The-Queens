@@ -311,6 +311,8 @@ export class SprayEngine {
   private controlsBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
   private sizeCheck = 0;
   private nextRattle = 0;
+  /** Whether the hiss is currently sounding, so its onset "psh" fires once. */
+  private hissOn = false;
   private errShown = false;
 
   // Loop handles.
@@ -574,9 +576,15 @@ export class SprayEngine {
     else img.addEventListener('load', apply, { once: true });
   }
 
-  /** Called by React after the can design changes, so the mural follows it. */
+  /**
+   * Called by React after the can design changes. A different can means a
+   * different piece, so the wall starts over: keeping the old coverage would
+   * reveal the new mural half-finished through paint meant for another.
+   */
   refreshArt(): void {
+    const changed = this.host.getArt().src !== this.muralSrc;
     this.loadArt();
+    if (changed) this.clearWall();
   }
 
   /**
@@ -1736,23 +1744,61 @@ export class SprayEngine {
       const d = buf.getChannelData(0);
       for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
 
+      // Master hiss bus. `setHiss` gates the whole spray sound through this.
+      const gain = actx.createGain();
+      gain.gain.value = 0;
+      gain.connect(actx.destination);
+
+      // One noise source, split into two voices so the sustain reads as
+      // pressurised aerosol rather than a flat band of static:
+      //  - air: broadband gas escaping, rolled off below ~1.1 kHz;
+      //  - top: a bright resonant band for the sharp "sss" of atomised paint.
       const src = actx.createBufferSource();
       src.buffer = buf;
       src.loop = true;
-      const bp = actx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = 3400;
-      bp.Q.value = 0.55;
-      const hp = actx.createBiquadFilter();
-      hp.type = 'highpass';
-      hp.frequency.value = 900;
-      const gain = actx.createGain();
-      gain.gain.value = 0;
-      src.connect(bp);
-      bp.connect(hp);
-      hp.connect(gain);
-      gain.connect(actx.destination);
+
+      const air = actx.createBiquadFilter();
+      air.type = 'highpass';
+      air.frequency.value = 1100;
+      air.Q.value = 0.5;
+      const airGain = actx.createGain();
+      airGain.gain.value = 0.72;
+
+      const top = actx.createBiquadFilter();
+      top.type = 'bandpass';
+      top.frequency.value = 6200;
+      top.Q.value = 0.85;
+      const topGain = actx.createGain();
+      topGain.gain.value = 0.5;
+
+      src.connect(air);
+      air.connect(airGain);
+      airGain.connect(gain);
+      src.connect(top);
+      top.connect(topGain);
+      topGain.connect(gain);
       src.start();
+
+      // The band wanders and the top voice flutters, so the jet shifts and
+      // spits slightly instead of sitting on one dead tone. Both feed pre-gate
+      // nodes, so a silent can stays silent.
+      const sweep = actx.createOscillator();
+      sweep.type = 'sine';
+      sweep.frequency.value = 6.5;
+      const sweepGain = actx.createGain();
+      sweepGain.gain.value = 1500;
+      sweep.connect(sweepGain);
+      sweepGain.connect(top.frequency);
+      sweep.start();
+
+      const flutter = actx.createOscillator();
+      flutter.type = 'triangle';
+      flutter.frequency.value = 24;
+      const flutterGain = actx.createGain();
+      flutterGain.gain.value = 0.14;
+      flutter.connect(flutterGain);
+      flutterGain.connect(topGain.gain);
+      flutter.start();
 
       const rattleBus = actx.createGain();
       rattleBus.gain.value = 0.9;
@@ -1762,6 +1808,7 @@ export class SprayEngine {
       this.gain = gain;
       this.noiseBuf = buf;
       this.rattleBus = rattleBus;
+      this.hissOn = false;
     } catch {
       this.actx = null;
     }
@@ -1806,6 +1853,24 @@ export class SprayEngine {
 
   private setHiss(v: number): void {
     if (!this.gain || !this.actx) return;
-    this.gain.gain.setTargetAtTime(this.host.isMuted() ? 0 : v, this.actx.currentTime, 0.04);
+    const on = v > 0 && !this.host.isMuted();
+    const t = this.actx.currentTime;
+    const g = this.gain.gain;
+    if (on && !this.hissOn) {
+      // Onset: the valve opening throws a brief over-pressure "psh" before the
+      // stream settles to its sustained hiss.
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(Math.max(0.0001, g.value), t);
+      g.linearRampToValueAtTime(v * 1.9, t + 0.02);
+      g.setTargetAtTime(v, t + 0.02, 0.08);
+    } else if (on) {
+      g.setTargetAtTime(v, t, 0.04);
+    } else {
+      // Release: the pressure tails off fast, not a hard cut.
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(Math.max(0.0001, g.value), t);
+      g.setTargetAtTime(0, t, 0.05);
+    }
+    this.hissOn = on;
   }
 }
