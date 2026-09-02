@@ -311,6 +311,8 @@ export class SprayEngine {
   private controlsBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
   private sizeCheck = 0;
   private nextRattle = 0;
+  /** Whether the hiss is currently sounding, so its onset "psh" fires once. */
+  private hissOn = false;
   private errShown = false;
 
   // Loop handles.
@@ -574,9 +576,15 @@ export class SprayEngine {
     else img.addEventListener('load', apply, { once: true });
   }
 
-  /** Called by React after the can design changes, so the mural follows it. */
+  /**
+   * Called by React after the can design changes. A different can means a
+   * different piece, so the wall starts over: keeping the old coverage would
+   * reveal the new mural half-finished through paint meant for another.
+   */
   refreshArt(): void {
+    const changed = this.host.getArt().src !== this.muralSrc;
     this.loadArt();
+    if (changed) this.clearWall();
   }
 
   /**
@@ -1734,24 +1742,55 @@ export class SprayEngine {
       const len = sr * 2;
       const buf = actx.createBuffer(1, len, sr);
       const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      // Pink-ish noise (Paul Kellet's economy filter), not flat white. White
+      // noise is what makes a hiss read as TV static or an arc; pink weights
+      // the low-mids the way escaping air does, so it sounds like a spray can.
+      let b0 = 0;
+      let b1 = 0;
+      let b2 = 0;
+      for (let i = 0; i < len; i++) {
+        const white = Math.random() * 2 - 1;
+        b0 = 0.99765 * b0 + white * 0.099046;
+        b1 = 0.963 * b1 + white * 0.2965164;
+        b2 = 0.57 * b2 + white * 1.0526913;
+        d[i] = (b0 + b1 + b2 + white * 0.1848) * 0.12;
+      }
 
+      // Master hiss bus. `setHiss` gates the whole spray sound through this.
+      const gain = actx.createGain();
+      gain.gain.value = 0;
+      gain.connect(actx.destination);
+
+      // A spray can is broadband escaping air — a smooth "shhh", not a tone.
+      // So: no resonant band and no tremolo (either one turns the noise into an
+      // electric buzz). Just white noise shaped by wide, gentle filters:
+      //  - highpass to drop the rumble;
+      //  - lowpass to tame the harsh fizz that otherwise reads as an arc;
+      //  - a broad, low-Q presence lift for the body of the hiss.
       const src = actx.createBufferSource();
       src.buffer = buf;
       src.loop = true;
-      const bp = actx.createBiquadFilter();
-      bp.type = 'bandpass';
-      bp.frequency.value = 3400;
-      bp.Q.value = 0.55;
+
       const hp = actx.createBiquadFilter();
       hp.type = 'highpass';
-      hp.frequency.value = 900;
-      const gain = actx.createGain();
-      gain.gain.value = 0;
-      src.connect(bp);
-      bp.connect(hp);
-      hp.connect(gain);
-      gain.connect(actx.destination);
+      hp.frequency.value = 1500;
+      hp.Q.value = 0.4;
+
+      const lp = actx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 7200;
+      lp.Q.value = 0.3;
+
+      const presence = actx.createBiquadFilter();
+      presence.type = 'peaking';
+      presence.frequency.value = 3800;
+      presence.Q.value = 0.7;
+      presence.gain.value = 4;
+
+      src.connect(hp);
+      hp.connect(lp);
+      lp.connect(presence);
+      presence.connect(gain);
       src.start();
 
       const rattleBus = actx.createGain();
@@ -1762,6 +1801,7 @@ export class SprayEngine {
       this.gain = gain;
       this.noiseBuf = buf;
       this.rattleBus = rattleBus;
+      this.hissOn = false;
     } catch {
       this.actx = null;
     }
@@ -1806,6 +1846,24 @@ export class SprayEngine {
 
   private setHiss(v: number): void {
     if (!this.gain || !this.actx) return;
-    this.gain.gain.setTargetAtTime(this.host.isMuted() ? 0 : v, this.actx.currentTime, 0.04);
+    const on = v > 0 && !this.host.isMuted();
+    const t = this.actx.currentTime;
+    const g = this.gain.gain;
+    if (on && !this.hissOn) {
+      // Onset: the valve opening throws a brief over-pressure "psh" before the
+      // stream settles to its sustained hiss.
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(Math.max(0.0001, g.value), t);
+      g.linearRampToValueAtTime(v * 1.5, t + 0.02);
+      g.setTargetAtTime(v, t + 0.02, 0.08);
+    } else if (on) {
+      g.setTargetAtTime(v, t, 0.04);
+    } else {
+      // Release: the pressure tails off fast, not a hard cut.
+      g.cancelScheduledValues(t);
+      g.setValueAtTime(Math.max(0.0001, g.value), t);
+      g.setTargetAtTime(0, t, 0.05);
+    }
+    this.hissOn = on;
   }
 }

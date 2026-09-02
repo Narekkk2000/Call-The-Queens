@@ -182,7 +182,7 @@ export function SprayWall(overrides: SprayWallProps) {
         inert={done}
       >
         <div className="can-tabs__bar">
-          <span className="can-tabs__label">CAN</span>
+          <span className="can-tabs__label">ART</span>
           {CAN_VARIANTS.map((v) => (
             <button
               key={v.id}
