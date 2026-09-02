@@ -1742,63 +1742,56 @@ export class SprayEngine {
       const len = sr * 2;
       const buf = actx.createBuffer(1, len, sr);
       const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      // Pink-ish noise (Paul Kellet's economy filter), not flat white. White
+      // noise is what makes a hiss read as TV static or an arc; pink weights
+      // the low-mids the way escaping air does, so it sounds like a spray can.
+      let b0 = 0;
+      let b1 = 0;
+      let b2 = 0;
+      for (let i = 0; i < len; i++) {
+        const white = Math.random() * 2 - 1;
+        b0 = 0.99765 * b0 + white * 0.099046;
+        b1 = 0.963 * b1 + white * 0.2965164;
+        b2 = 0.57 * b2 + white * 1.0526913;
+        d[i] = (b0 + b1 + b2 + white * 0.1848) * 0.12;
+      }
 
       // Master hiss bus. `setHiss` gates the whole spray sound through this.
       const gain = actx.createGain();
       gain.gain.value = 0;
       gain.connect(actx.destination);
 
-      // One noise source, split into two voices so the sustain reads as
-      // pressurised aerosol rather than a flat band of static:
-      //  - air: broadband gas escaping, rolled off below ~1.1 kHz;
-      //  - top: a bright resonant band for the sharp "sss" of atomised paint.
+      // A spray can is broadband escaping air — a smooth "shhh", not a tone.
+      // So: no resonant band and no tremolo (either one turns the noise into an
+      // electric buzz). Just white noise shaped by wide, gentle filters:
+      //  - highpass to drop the rumble;
+      //  - lowpass to tame the harsh fizz that otherwise reads as an arc;
+      //  - a broad, low-Q presence lift for the body of the hiss.
       const src = actx.createBufferSource();
       src.buffer = buf;
       src.loop = true;
 
-      const air = actx.createBiquadFilter();
-      air.type = 'highpass';
-      air.frequency.value = 1100;
-      air.Q.value = 0.5;
-      const airGain = actx.createGain();
-      airGain.gain.value = 0.72;
+      const hp = actx.createBiquadFilter();
+      hp.type = 'highpass';
+      hp.frequency.value = 1500;
+      hp.Q.value = 0.4;
 
-      const top = actx.createBiquadFilter();
-      top.type = 'bandpass';
-      top.frequency.value = 6200;
-      top.Q.value = 0.85;
-      const topGain = actx.createGain();
-      topGain.gain.value = 0.5;
+      const lp = actx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 7200;
+      lp.Q.value = 0.3;
 
-      src.connect(air);
-      air.connect(airGain);
-      airGain.connect(gain);
-      src.connect(top);
-      top.connect(topGain);
-      topGain.connect(gain);
+      const presence = actx.createBiquadFilter();
+      presence.type = 'peaking';
+      presence.frequency.value = 3800;
+      presence.Q.value = 0.7;
+      presence.gain.value = 4;
+
+      src.connect(hp);
+      hp.connect(lp);
+      lp.connect(presence);
+      presence.connect(gain);
       src.start();
-
-      // The band wanders and the top voice flutters, so the jet shifts and
-      // spits slightly instead of sitting on one dead tone. Both feed pre-gate
-      // nodes, so a silent can stays silent.
-      const sweep = actx.createOscillator();
-      sweep.type = 'sine';
-      sweep.frequency.value = 6.5;
-      const sweepGain = actx.createGain();
-      sweepGain.gain.value = 1500;
-      sweep.connect(sweepGain);
-      sweepGain.connect(top.frequency);
-      sweep.start();
-
-      const flutter = actx.createOscillator();
-      flutter.type = 'triangle';
-      flutter.frequency.value = 24;
-      const flutterGain = actx.createGain();
-      flutterGain.gain.value = 0.14;
-      flutter.connect(flutterGain);
-      flutterGain.connect(topGain.gain);
-      flutter.start();
 
       const rattleBus = actx.createGain();
       rattleBus.gain.value = 0.9;
@@ -1861,7 +1854,7 @@ export class SprayEngine {
       // stream settles to its sustained hiss.
       g.cancelScheduledValues(t);
       g.setValueAtTime(Math.max(0.0001, g.value), t);
-      g.linearRampToValueAtTime(v * 1.9, t + 0.02);
+      g.linearRampToValueAtTime(v * 1.5, t + 0.02);
       g.setTargetAtTime(v, t + 0.02, 0.08);
     } else if (on) {
       g.setTargetAtTime(v, t, 0.04);
