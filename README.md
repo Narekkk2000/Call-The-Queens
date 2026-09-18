@@ -1,7 +1,7 @@
 # Call The Queens — Spray Wall
 
 An interactive coming-soon page. Hold and drag a spray can to paint a hidden
-mural onto a concrete wall. Choose from four artworks; once enough of the piece
+mural onto a concrete wall. Choose from three artworks; once enough of the piece
 is painted, the wall finishes itself and reveals the contact page.
 
 ## Development
@@ -53,7 +53,7 @@ src/spray/
 src/components/
   SprayWall.tsx    Stage, controls, and engine lifecycle
   SprayWall.css    Concrete, lighting, responsive controls, and motion
-  SprayCan.tsx     Four SVG can designs
+  SprayCan.tsx     Three SVG can designs
   RevealScreen.tsx Coming-soon and contact page
 src/site.ts        Brand, phone, address, license, and menu link
 ```
@@ -64,7 +64,7 @@ src/site.ts        Brand, phone, address, license, and menu link
 <SprayWall
   radiusScale={1}   // multiply the automatically sized cone
   // radius={120}  // optionally use a fixed CSS-pixel radius
-  threshold={0.78} // visible artwork needed before automatic completion
+  threshold={0.86} // visible artwork needed before automatic completion
   drips={true}
   canSize={1}
   sound={true}
@@ -74,8 +74,9 @@ src/site.ts        Brand, phone, address, license, and menu link
 ```
 
 The cone scales with the visible mural and viewport proportions. Portrait
-screens use a slightly smaller cone and a minimum 86% coverage threshold so
-the central subject is complete before the finishing transition. Resizing
+screens use a slightly smaller cone, and enforce the same 86% coverage floor
+the default already sets, so the central subject is complete before the
+finishing transition. Resizing
 preserves the existing paint mask and ends any active gesture.
 
 Artwork files live in `public/assets/`; their mapping is in `src/spray/art.ts`.

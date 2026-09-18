@@ -202,26 +202,22 @@
   font-family: Archivo, sans-serif;
   font-style: italic;
   font-weight: 900;
-  font-size: clamp(32px, 4.5vw, 66px);
+  font-size: clamp(28px, 4.2vw, 60px);
   letter-spacing: -0.025em;
+  line-height: 0.95;
   text-transform: uppercase;
+  text-align: center;
+  /* Held narrow so the instruction breaks across two balanced lines. On one
+     line it runs into the parked can and reads as a caption rather than a
+     headline. */
+  max-width: min(58vw, 660px);
+  text-wrap: balance;
   color: #fff;
-  white-space: nowrap;
   transform: skewX(-7deg);
   text-shadow:
     0 0 36px rgba(255, 46, 154, 0.22),
     0 4px 18px rgba(0, 0, 0, 0.85);
   animation: wall-type-in 0.8s cubic-bezier(.2,.8,.2,1) both;
-}
-
-.hint__sub {
-  font-family: 'Space Mono', monospace;
-  font-weight: 400;
-  font-size: clamp(10px, 1vw, 12px);
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.5);
-  white-space: nowrap;
 }
 
 .hint__tail {
@@ -440,12 +436,8 @@
   filter: drop-shadow(0 0 22px rgba(255, 58, 205, 0.5)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.55));
 }
 
-/* Each design carries its own light: raw metal picks up the room, the branded
-   can throws the brand's magenta, chrome throws the wall's violet. */
-.can--mono {
-  filter: drop-shadow(0 0 16px rgba(198, 210, 230, 0.3)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.55));
-}
-
+/* Each design carries its own light: the branded can throws the brand's
+   magenta, chrome throws the wall's violet. */
 .can--queens {
   filter: drop-shadow(0 0 20px rgba(255, 46, 154, 0.45)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.6));
 }
@@ -468,7 +460,7 @@
 /* ------------------------------------------------------------------ mobile */
 
 /* The meter and the buttons close in on the centre before the phone breakpoint
-   does, so the can tabs move up to their own row early. Four tabs are ~345px
+   does, so the can tabs move up to their own row early. Three tabs are ~265px
    wide, which is what sets this threshold. */
 @media (max-width: 1000px) {
   .can-tabs {
@@ -477,8 +469,8 @@
 }
 
 @media (max-width: 700px) {
-  /* The headline is nowrap by design; on a narrow stage it has to wrap or it
-     runs off both edges. The flanking rules are dropped to buy it that width. */
+  /* The flanking rules are dropped on a narrow stage to buy the headline the
+     full width; its own max-width goes with them. */
   /* Lifted clear of the parked can, which reaches much further up the stage
      once the wall is portrait. */
   .hint {
@@ -496,11 +488,9 @@
   }
 
   .hint__headline {
-    white-space: normal;
-    text-align: center;
-    text-wrap: balance;
-    font-size: clamp(32px, 9vw, 52px);
-    line-height: 1.14;
+    max-width: none;
+    font-size: clamp(24px, 6.8vw, 40px);
+    line-height: 1.06;
   }
 
   /* Meter and buttons share the bottom edge and collide once the stage is
@@ -586,8 +576,7 @@
   .can-tabs__thumb { width: clamp(40px, 10vw, 52px); height: 28px; }
   .hud { bottom: calc(105px + env(safe-area-inset-bottom)); left: 24px; right: 24px; }
   .hud__label, .hud__pct { font-size: 8px; }
-  .hint { bottom: 28%; }
-  .hint__sub { font-size: 9px; letter-spacing: 0.08em; }
+  .hint { bottom: 37%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
