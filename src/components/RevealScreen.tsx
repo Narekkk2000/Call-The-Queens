@@ -10,11 +10,16 @@ const BLOBS = [
   { left: '62%', top: '18%', size: '13vmax', duration: '.5s', delay: '.22s' },
 ];
 
+type RevealScreenProps = {
+  /** Back to a blank wall at 0%. Wired to the corner mark. */
+  onRestart: () => void;
+};
+
 /**
  * Shown once the wall is fully revealed: the paint flood, the hero lockup and
  * the scrollable contact panel.
  */
-export function RevealScreen() {
+export function RevealScreen({ onRestart }: RevealScreenProps) {
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Position-based reveal rather than IntersectionObserver: this panel is an
@@ -212,8 +217,11 @@ export function RevealScreen() {
       </div>
 
       {/* Outside the scrolling panel on purpose: it holds the corner and shrinks
-          as you travel, rather than sliding away with the hero. */}
-      <img className="mark" src={assetUrl(site.logo)} alt={site.brand} />
+          as you travel, rather than sliding away with the hero. Doubles as the
+          way back to a blank wall. */}
+      <button className="mark" type="button" onClick={onRestart} title="Paint the wall again">
+        <img className="mark__img" src={assetUrl(site.logo)} alt={`${site.brand} — paint the wall again`} />
+      </button>
     </>
   );
 }

@@ -25,7 +25,6 @@ export const ART: Record<CanVariant, Art> = {
   queens: { src: 'assets/s7.png', hues: ['204,34,238', '232,170,255'], splat: '204,34,238' },
   chrome: { src: 'assets/v4.png', hues: ['55,232,255', '255,46,154'], splat: '55,232,255' },
   midnight: { src: 'assets/s9.png', hues: ['204,34,238', '150,40,190'], splat: '204,34,238' },
-  vintage: { src: 'assets/v3.png', hues: ['255,122,47', '255,232,61'], splat: '255,122,47' },
 };
 
 export { assetUrl as artUrl } from '../site';

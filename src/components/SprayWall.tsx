@@ -11,29 +11,24 @@ const DEFAULTS: SprayConfig = {
   // `radius` is intentionally absent: it is derived from the stage size so the
   // effort to reveal the wall is the same on every display.
   radiusScale: 1,
-  // Share of the artwork's ink that has to be uncovered before the wall floods
-  // itself. The ink is concentrated in the middle of the piece, so a low bar
-  // trips on the centre pass alone: at 0.6 the reveal fired midway through the
-  // second sweep, with most of the wall still bare. Measured on a 800x778
-  // stage, a full sweep of the wall lands ~40% of the ink, so this asks for
-  // roughly three of them — the mural reads as finished, and the flood is left
-  // to take the far corners rather than making you hunt them.
-  threshold: 0.8,
+  // A satisfying first coat, then a short finish across the remaining corners.
+  threshold: 0.78,
   drips: true,
   sound: true,
   canSize: 1,
   // Beat of silence on the finished mural before the coming-soon screen.
   revealDelay: 1200,
-  // Flight time from nozzle to wall. See the note on SprayConfig.sprayDelay
-  // before raising this — it is perceived lag as much as it is physics.
-  sprayDelay: 150,
+  // The artwork follows input immediately; mist supplies the airborne motion.
+  sprayDelay: 0,
 };
 
 export function SprayWall(overrides: SprayWallProps) {
   const [done, setDone] = useState(false);
   const [muted, setMuted] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [hintVisible, setHintVisible] = useState(true);
+  // True from the first mark until a reset. The hint and the art picker both
+  // clear out once there is paint on the wall.
+  const [painted, setPainted] = useState(false);
   // Which can design is in hand. Each carries its own mural, so a swap changes
   // both the piece being revealed and the paint that reveals it.
   const [canVariant, setCanVariant] = useState<CanVariant>('mono');
@@ -84,7 +79,7 @@ export function SprayWall(overrides: SprayWallProps) {
         isMuted: () => latest.current.muted,
         onComplete: () => setDone(true),
         onProgress: setProgress,
-        onHintVisibleChange: setHintVisible,
+        onPaintedChange: setPainted,
       },
     );
     engineRef.current = engine;
@@ -107,6 +102,8 @@ export function SprayWall(overrides: SprayWallProps) {
     engineRef.current?.refreshArt();
   }, [canVariant]);
 
+  // Shared by the RESET button and the corner mark on the reveal screen: both
+  // mean "blank wall, 0%, start again".
   const handleReset = useCallback(() => {
     engineRef.current?.clearWall();
     setDone(false);
@@ -115,7 +112,8 @@ export function SprayWall(overrides: SprayWallProps) {
   const pct = Math.round(progress * 100);
 
   return (
-    <div className="wall" ref={wrapRef}>
+    <div className={`wall${done ? ' wall--done' : ''}`} ref={wrapRef}>
+      <div className="wall__status" aria-hidden="true"><span />MAKE YOUR MARK</div>
       <div className="wall__surface">
         <div className="wall__seams" />
         <div className="wall__course-line" />
@@ -141,22 +139,20 @@ export function SprayWall(overrides: SprayWallProps) {
       <canvas className="wall__canvas wall__canvas--grain" ref={grainRef} />
       <canvas className="wall__canvas wall__canvas--mist" ref={mistRef} />
 
-      <div className="hint" style={{ opacity: hintVisible ? 1 : 0 }}>
+      <div className="hint" style={{ opacity: painted ? 0 : 1 }}>
         <div className="hint__row">
           <div className="hint__rule hint__rule--left" />
-          {/* Same instruction, phrased for the device's primary input. */}
           <div className="hint__headline">
-            <span className="hint__copy--pointer">Hold &amp; drag your mouse to spray</span>
-            <span className="hint__copy--touch">Hold &amp; drag to spray</span>
+            Make your mark.
           </div>
           <div className="hint__rule hint__rule--right" />
         </div>
-        <div className="hint__sub">Reveal the wall</div>
+        <div className="hint__sub">Hold &amp; drag to reveal the wall</div>
         <div className="hint__tail" />
       </div>
 
       <div className="controls" ref={controlsRef}>
-        <button type="button" className="controls__button" onClick={() => setMuted((m) => !m)}>
+        <button type="button" className="controls__button" aria-pressed={!muted} aria-label={muted ? 'Turn sound on' : 'Turn sound off'} onClick={() => setMuted((m) => !m)}>
           {muted ? 'SOUND OFF' : 'SOUND ON'}
         </button>
         <button type="button" className="controls__button" onClick={handleReset}>
@@ -165,7 +161,7 @@ export function SprayWall(overrides: SprayWallProps) {
       </div>
 
       {!done && (
-        <div className="hud">
+        <div className="hud" role="progressbar" aria-label="Wall revealed" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
           <div className="hud__label">REVEALED</div>
           <div className="hud__track">
             <div className="hud__fill" style={{ width: `${pct}%` }} />
@@ -175,13 +171,15 @@ export function SprayWall(overrides: SprayWallProps) {
       )}
 
       {/* Kept mounted through the reveal so the engine's cached box stays valid;
-          it only has to be out of the way, not gone. */}
+          it only has to be out of the way, not gone. It goes on the first mark
+          too — choosing the art is a decision you make before you paint, and
+          the bar would otherwise sit on top of the piece being revealed. */}
       <div
-        className={`can-tabs${done ? ' can-tabs--hidden' : ''}`}
+        className={`can-tabs${done || painted ? ' can-tabs--hidden' : ''}`}
         ref={canTabsRef}
-        inert={done}
+        inert={done || painted}
       >
-        <div className="can-tabs__bar">
+        <div className="can-tabs__bar" role="group" aria-label="Choose artwork">
           <span className="can-tabs__label">ART</span>
           {CAN_VARIANTS.map((v) => (
             <button
@@ -199,7 +197,7 @@ export function SprayWall(overrides: SprayWallProps) {
         </div>
       </div>
 
-      {done && <RevealScreen />}
+      {done && <RevealScreen onRestart={handleReset} />}
 
       <SprayCan ref={canRef} variant={canVariant} />
     </div>

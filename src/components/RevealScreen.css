@@ -141,12 +141,37 @@
   top: clamp(16px, 3vh, 40px);
   left: clamp(16px, 3.5vw, 52px);
   width: clamp(96px, 13vw, 210px);
-  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  appearance: none;
+  cursor: pointer;
   transform-origin: top left;
   transform: scale(calc(1 - 0.46 * var(--ctq-travel, 0)));
   /* Fades in with the eyebrow rules rather than popping in on mount. */
   animation: ctqFade 0.9s 0.7s ease both;
-  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.mark__img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.mark:hover,
+.mark:focus-visible {
+  opacity: 0.72;
+}
+
+.mark:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.85);
+  outline-offset: 6px;
+  border-radius: 4px;
+}
+
+.mark:active {
+  opacity: 0.55;
 }
 
 /* --------------------------------------------------------------- hero copy */
