@@ -2,10 +2,9 @@ import { forwardRef } from 'react';
 
 /**
  * The can designs the stage can wear. `id` doubles as the CSS modifier
- * (`.can--mono`) that picks the drop-shadow, so keep them in step.
+ * (`.can--queens`) that picks the drop-shadow, so keep them in step.
  */
 export const CAN_VARIANTS = [
-  { id: 'mono', label: 'MONO' },
   { id: 'queens', label: 'QUEENS' },
   { id: 'chrome', label: 'CHROME' },
   { id: 'midnight', label: 'MIDNIGHT' },
@@ -39,13 +38,12 @@ const CAP_PATH = 'M72 45V17C72 8.7 78.7 2 87 2H113C121.3 2 128 8.7 128 17V45Z';
  * cap, collar and base rim get their own passes so the silhouette has depth.
  */
 export const SprayCan = forwardRef<HTMLDivElement, { variant?: CanVariant }>(function SprayCan(
-  { variant = 'mono' },
+  { variant = 'queens' },
   ref,
 ) {
   return (
     <div ref={ref} className={`can can--${variant}`} aria-hidden="true">
       <svg className="can__svg" viewBox="0 0 200 424">
-        {variant === 'mono' && <MonoArt />}
         {variant === 'queens' && <QueensArt />}
         {variant === 'chrome' && <ChromeArt />}
         {variant === 'midnight' && <MidnightArt />}
@@ -55,209 +53,7 @@ export const SprayCan = forwardRef<HTMLDivElement, { variant?: CanVariant }>(fun
 });
 
 /**
- * 01 — Mono. Bare mill-finish aluminium: no label, just brushed tooth, two
- * engraved rules, fine print running up the can and a chip of the colour
- * inside. All of the interest is in the metal.
- */
-function MonoArt() {
-  return (
-    <>
-      <defs>
-        <clipPath id="ctqMBody">
-          <path d={BODY_PATH} />
-        </clipPath>
-        <clipPath id="ctqMCap">
-          <path d={CAP_PATH} />
-        </clipPath>
-
-        {/* Raw alu: bright specular at 24%, dark at both edges, rim light on the right. */}
-        <linearGradient id="ctqMAlu" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="#3d414a" />
-          <stop offset="0.05" stopColor="#767c87" />
-          <stop offset="0.14" stopColor="#c4cad4" />
-          <stop offset="0.24" stopColor="#eff2f7" />
-          <stop offset="0.34" stopColor="#d2d7df" />
-          <stop offset="0.52" stopColor="#a7acb6" />
-          <stop offset="0.7" stopColor="#828791" />
-          <stop offset="0.86" stopColor="#585c64" />
-          <stop offset="0.96" stopColor="#383b43" />
-          <stop offset="1" stopColor="#8b909a" />
-        </linearGradient>
-
-        {/* Light from above, floor darkening below. */}
-        <linearGradient id="ctqMFall" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#000000" stopOpacity="0.42" />
-          <stop offset="0.1" stopColor="#000000" stopOpacity="0.08" />
-          <stop offset="0.22" stopColor="#ffffff" stopOpacity="0.06" />
-          <stop offset="0.76" stopColor="#000000" stopOpacity="0" />
-          <stop offset="1" stopColor="#000000" stopOpacity="0.34" />
-        </linearGradient>
-
-        <linearGradient id="ctqMShoulder" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#000000" stopOpacity="0.26" />
-          <stop offset="1" stopColor="#000000" stopOpacity="0" />
-        </linearGradient>
-
-        {/* Soft-touch black cap: a single broad sheen, no gloss. */}
-        <linearGradient id="ctqMCapFill" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="#0d0d10" />
-          <stop offset="0.16" stopColor="#333238" />
-          <stop offset="0.28" stopColor="#3f3e45" />
-          <stop offset="0.52" stopColor="#232227" />
-          <stop offset="0.84" stopColor="#131216" />
-          <stop offset="1" stopColor="#2d2c33" />
-        </linearGradient>
-
-        <linearGradient id="ctqMCup" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="#585c64" />
-          <stop offset="0.2" stopColor="#c3c8d1" />
-          <stop offset="0.38" stopColor="#e8ecf1" />
-          <stop offset="0.6" stopColor="#9ba0aa" />
-          <stop offset="0.85" stopColor="#5c6068" />
-          <stop offset="1" stopColor="#8f949e" />
-        </linearGradient>
-
-        <linearGradient id="ctqMRim" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0" stopColor="#2c2f35" />
-          <stop offset="0.2" stopColor="#8b9099" />
-          <stop offset="0.33" stopColor="#b6bbc4" />
-          <stop offset="0.6" stopColor="#71757e" />
-          <stop offset="0.88" stopColor="#33363c" />
-          <stop offset="1" stopColor="#666a72" />
-        </linearGradient>
-
-        <radialGradient id="ctqMGround" cx="0.5" cy="0.5" r="0.5">
-          <stop offset="0" stopColor="#000000" stopOpacity="0.5" />
-          <stop offset="0.6" stopColor="#000000" stopOpacity="0.2" />
-          <stop offset="1" stopColor="#000000" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-
-      <ellipse cx="100" cy="404" rx="74" ry="15" fill="url(#ctqMGround)" />
-
-      <g clipPath="url(#ctqMBody)">
-        <rect x="28" y="75" width="144" height="330" fill="url(#ctqMAlu)" />
-
-        {/* brushed tooth */}
-        <g opacity="0.13">
-          <path
-            d="M50 79V400M74 79V400M97 79V400M126 79V400M150 79V400"
-            stroke="#ffffff"
-            strokeWidth="0.7"
-          />
-          <path d="M60 79V400M84 79V400M112 79V400M140 79V400" stroke="#000000" strokeWidth="0.7" />
-        </g>
-
-        <rect x="28" y="79" width="144" height="66" fill="url(#ctqMShoulder)" />
-
-        {/* engraved rules: a dark groove with a lit lower edge */}
-        <path d="M32 158H168" stroke="#000000" strokeOpacity="0.24" strokeWidth="1.1" />
-        <path d="M32 159.6H168" stroke="#ffffff" strokeOpacity="0.28" strokeWidth="1.1" />
-        <path d="M32 368H168" stroke="#000000" strokeOpacity="0.24" strokeWidth="1.1" />
-        <path d="M32 369.6H168" stroke="#ffffff" strokeOpacity="0.28" strokeWidth="1.1" />
-
-        {/* Type runs up the can. Rotated about (100, 252), so a line's `y` sets
-            how far across the cylinder it sits and `x` sets its height. */}
-        <text
-          transform="rotate(-90 100 252)"
-          x="100"
-          y="252"
-          textAnchor="middle"
-          fontFamily="'Space Mono', monospace"
-          fontSize="12"
-          fontWeight="700"
-          letterSpacing="4"
-          fill="#20232a"
-          fillOpacity="0.78"
-        >
-          CALL THE QUEENS
-        </text>
-        <text
-          transform="rotate(-90 100 252)"
-          x="100"
-          y="284"
-          textAnchor="middle"
-          fontFamily="'Space Mono', monospace"
-          fontSize="8"
-          letterSpacing="2.4"
-          fill="#20232a"
-          fillOpacity="0.42"
-        >
-          400 ML · HIGH PRESSURE
-        </text>
-        <text
-          transform="rotate(-90 100 252)"
-          x="100"
-          y="220"
-          textAnchor="middle"
-          fontFamily="'Space Mono', monospace"
-          fontSize="8"
-          letterSpacing="2.4"
-          fill="#20232a"
-          fillOpacity="0.42"
-        >
-          NO. 01 — RAW ALU
-        </text>
-
-        {/* chip of the colour inside, the way a real rack can carries it */}
-        <rect x="91" y="344" width="18" height="18" rx="3" fill="#e8218f" />
-        <rect
-          x="91"
-          y="344"
-          width="18"
-          height="18"
-          rx="3"
-          fill="none"
-          stroke="#20232a"
-          strokeOpacity="0.35"
-          strokeWidth="1"
-        />
-
-        <rect x="28" y="75" width="144" height="330" fill="url(#ctqMFall)" />
-      </g>
-
-      {/* rolled base rim */}
-      <rect x="32" y="378" width="136" height="22" rx="5" fill="url(#ctqMRim)" />
-      <path d="M33 380H167" stroke="#000000" strokeOpacity="0.35" strokeWidth="1.4" />
-      <path d="M33 396.5H167" stroke="#000000" strokeOpacity="0.55" strokeWidth="4" />
-
-      {/* crimp bead and valve cup */}
-      <rect x="58" y="65" width="84" height="16" rx="6" fill="url(#ctqMRim)" />
-      <path d="M60 79H140" stroke="#000000" strokeOpacity="0.3" strokeWidth="1.6" />
-      <rect x="66" y="51" width="68" height="16" rx="3" fill="url(#ctqMCup)" />
-      <path d="M68 55H132" stroke="#ffffff" strokeOpacity="0.4" strokeWidth="1" />
-
-      <rect x="88" y="39" width="24" height="16" rx="2" fill="#1b1a1f" />
-
-      <path d={CAP_PATH} fill="url(#ctqMCapFill)" />
-      <g clipPath="url(#ctqMCap)">
-        <path
-          d="M79 45V19C79 15 80.5 12 83 10"
-          stroke="#ffffff"
-          strokeOpacity="0.17"
-          strokeWidth="3"
-          strokeLinecap="round"
-        />
-        <rect x="70" y="35" width="60" height="1.2" fill="#000000" fillOpacity="0.38" />
-        <rect x="70" y="2" width="60" height="7" fill="#000000" fillOpacity="0.22" />
-      </g>
-
-      {/* outlet */}
-      <ellipse cx="100" cy="9" rx="10" ry="5" fill="#0a0a0c" />
-      <ellipse cx="100" cy="8.2" rx="5" ry="2.6" fill="#000000" />
-      <path
-        d="M90.5 7.6A10 5 0 0 1 109.5 7.6"
-        stroke="#c9ced8"
-        strokeOpacity="0.32"
-        strokeWidth="1"
-        fill="none"
-      />
-    </>
-  );
-}
-
-/**
- * 02 — Queens. Matte black can with a wrapped white label, the wordmark set in
+ * 01 — Queens. Matte black can with a wrapped white label, the wordmark set in
  * the site's Archivo italic running up the cylinder, and a magenta cap.
  */
 function QueensArt() {
@@ -444,7 +240,7 @@ function QueensArt() {
 }
 
 /**
- * 03 — Chrome. Mirror finish, so the can is mostly its surroundings: hard
+ * 02 — Chrome. Mirror finish, so the can is mostly its surroundings: hard
  * banding across the cylinder, a bright sky above the horizon line and the
  * room's neon bouncing back off the floor.
  */
@@ -589,7 +385,7 @@ function ChromeArt() {
 }
 
 /**
- * 04 — Midnight. Black on black: a matte body carrying a gloss-varnish
+ * 03 — Midnight. Black on black: a matte body carrying a gloss-varnish
  * wordmark, read only by the sheen. A dark can needs its edges lit or it
  * dissolves into the wall, so both rims carry a hard highlight and every metal
  * part — cup, crimp, base rim — is polished rather than blacked out.

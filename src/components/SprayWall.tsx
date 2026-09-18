@@ -11,8 +11,9 @@ const DEFAULTS: SprayConfig = {
   // `radius` is intentionally absent: it is derived from the stage size so the
   // effort to reveal the wall is the same on every display.
   radiusScale: 1,
-  // A satisfying first coat, then a short finish across the remaining corners.
-  threshold: 0.78,
+  // High enough that the piece reads as painted before the wall takes over.
+  // Matches the floor portrait screens already enforce (`PORTRAIT_THRESHOLD`).
+  threshold: 0.86,
   drips: true,
   sound: true,
   canSize: 1,
@@ -31,7 +32,7 @@ export function SprayWall(overrides: SprayWallProps) {
   const [painted, setPainted] = useState(false);
   // Which can design is in hand. Each carries its own mural, so a swap changes
   // both the piece being revealed and the paint that reveals it.
-  const [canVariant, setCanVariant] = useState<CanVariant>('mono');
+  const [canVariant, setCanVariant] = useState<CanVariant>('queens');
 
   const wrapRef = useRef<HTMLDivElement>(null);
   const paintRef = useRef<HTMLCanvasElement>(null);
@@ -143,11 +144,10 @@ export function SprayWall(overrides: SprayWallProps) {
         <div className="hint__row">
           <div className="hint__rule hint__rule--left" />
           <div className="hint__headline">
-            Make your mark.
+            Hold &amp; drag to reveal the wall
           </div>
           <div className="hint__rule hint__rule--right" />
         </div>
-        <div className="hint__sub">Hold &amp; drag to reveal the wall</div>
         <div className="hint__tail" />
       </div>
 
