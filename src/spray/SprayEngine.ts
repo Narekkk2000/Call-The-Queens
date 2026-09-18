@@ -1,4 +1,7 @@
 import { artUrl, type Art } from './art';
+import { createBrushes, createSoftBrush } from './brush';
+import { StrokeSampler, type StrokePoint } from './StrokeSampler';
+import { paintRegion, type PaintBounds } from './paintRegion';
 
 export type SprayConfig = {
   /**
@@ -25,13 +28,8 @@ export type SprayConfig = {
    */
   revealDelay: number;
   /**
-   * Milliseconds of flight time between paint leaving the nozzle and landing
-   * on the wall, so the aerosol is visibly in the air first.
-   *
-   * The perceived lag is `drag speed x delay`, so this trades directly against
-   * responsiveness: at a typical 500px/s drag, 150ms puts the paint ~75px
-   * behind the can — around half a spray radius, which reads as travel. Past
-   * ~300ms it stops reading as physics and starts reading as input lag.
+   * Optional paint flight time in ms. Keep at zero for immediate feedback;
+   * the airborne particles provide the illusion of travel independently.
    */
   sprayDelay: number;
 };
@@ -50,7 +48,8 @@ export type SprayElements = {
   can: HTMLDivElement;
   /** The sound/reset cluster — the can gets out of its way. */
   controls: HTMLDivElement;
-  /** The can-design tabs, which need a real cursor for the same reason. */
+  /** The art picker, which needs a real cursor for the same reason — and which
+      steps aside once the first mark lands. */
   canTabs: HTMLDivElement;
 };
 
@@ -64,8 +63,11 @@ export type SprayHost = {
   onComplete(): void;
   /** Coverage in 0..1, already normalised against the reveal threshold. */
   onProgress(value: number): void;
-  /** Show or hide the "hold & drag to spray" hint. */
-  onHintVisibleChange(visible: boolean): void;
+  /**
+   * The visitor has laid down their first paint, or a reset has taken it back.
+   * The hint and the art picker both step aside on the way up.
+   */
+  onPaintedChange(painted: boolean): void;
 };
 
 type Drip = { x: number; y: number; r: number; v: number; age: number; life: number };
@@ -154,7 +156,7 @@ const RADIUS_MAX = 420;
  * over in seconds in the hand. Shrink the cone further when the stage is taller
  * than it is wide. Empirical, and the only place the two are treated unequally.
  */
-const PORTRAIT_EFFORT = 1.55;
+const PORTRAIT_EFFORT = 1.15;
 
 /**
  * Portrait crops the mural to its middle, so the ink left on screen is the
@@ -164,14 +166,14 @@ const PORTRAIT_EFFORT = 1.55;
  * is still half dark: the drips cut revealed stripes through it, which counts
  * as coverage but does not look like a finished piece.
  */
-const PORTRAIT_THRESHOLD = 0.93;
+const PORTRAIT_THRESHOLD = 0.86;
 
 /**
  * How far outside the sound/reset cluster the can starts getting out of the
  * way, in CSS pixels. The stage hides the system cursor, so without this the
  * can sits under the pointer and the buttons are awkward to aim at.
  */
-const CONTROLS_MARGIN = 44;
+const CONTROLS_MARGIN = 20;
 
 /** Body length below the nozzle, as a multiple of the can's width. */
 const CAN_BODY_LENGTH = 2.06;
@@ -228,7 +230,6 @@ export class SprayEngine {
   private readonly mask = document.createElement('canvas');
   private readonly sample = document.createElement('canvas');
   private readonly fink = document.createElement('canvas');
-  private readonly glowSmall = document.createElement('canvas');
   /**
    * How wet the paint is, everywhere, at a fraction of the wall's resolution.
    * Alpha is wetness: a stamp writes 1, and the whole buffer is faded down every
@@ -241,6 +242,29 @@ export class SprayEngine {
   private readonly muralSoft = document.createElement('canvas');
   /** Sharp mural masked by coverage squared, so detail only resolves in thick paint. */
   private readonly detail = document.createElement('canvas');
+  private readonly coat = document.createElement('canvas');
+  private readonly sharp = document.createElement('canvas');
+  private readonly brushes = createBrushes();
+  private readonly wetBrush = createSoftBrush();
+  private airBrush = createSoftBrush('255,72,214');
+  private brushIndex = 0;
+  private dirtyBounds: PaintBounds | null = null;
+  private coverageDirty = false;
+  private lastMeasure = 0;
+  private floorDirty = true;
+  private stroke: StrokeSampler | null = null;
+  private activePointer: number | null = null;
+  private pressure = 1;
+  private depositsSinceFrame = 0;
+  private wetElapsed = 0;
+  private mistBlank = true;
+  private dwellTime = 0;
+  private particleTime = 0;
+  private wrapLeft = 0;
+  private wrapTop = 0;
+  private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  private readonly resizeObserver = new ResizeObserver(() => this.resizeIfNeeded());
+  private readonly controlsObserver = new ResizeObserver(() => this.measureControls());
   private detailCtx: CanvasRenderingContext2D | null = null;
   private readonly sctx: CanvasRenderingContext2D;
 
@@ -251,7 +275,6 @@ export class SprayEngine {
   private fctx: CanvasRenderingContext2D | null = null;
   private maskCtx: CanvasRenderingContext2D | null = null;
   private finkCtx: CanvasRenderingContext2D | null = null;
-  private gsctx: CanvasRenderingContext2D | null = null;
   private wctx: CanvasRenderingContext2D | null = null;
   private wetCtx: CanvasRenderingContext2D | null = null;
 
@@ -276,6 +299,7 @@ export class SprayEngine {
   /** src of the mural currently loaded, so a can swap only reloads on a change. */
   private muralSrc = '';
   private ink: Uint8Array | null = null;
+  private muralPixels: Uint8ClampedArray | null = null;
   /** Ink that currently falls inside the wall — the reveal denominator. */
   private reachable: Uint8Array | null = null;
   private reachableCount = 0;
@@ -291,7 +315,6 @@ export class SprayEngine {
   private canVx = 0;
   private canVy = 0;
   private can = { x: 0, y: 0, rot: 10, tx: 0, ty: 0 };
-  private lastStamp: { x: number; y: number } | null = null;
   private dirty = true;
   /** How wet the wettest paint on the wall is, 0..1 — lets the pass be skipped. */
   private wetLevel = 0;
@@ -303,24 +326,20 @@ export class SprayEngine {
   private finishing = false;
   private floodT = 0;
   private coverage = 0;
-  private hintHidden = false;
+  /** Set by the first mark of a run, cleared by `clearWall`. */
+  private painted = false;
   /** True from the moment the wall is fully revealed until the hold expires. */
   private completing = false;
   private completeTimer: ReturnType<typeof setTimeout> | null = null;
   /** Control clusters in wrap-local coordinates, already padded. Empty until measured. */
   private controlsBoxes: { x0: number; y0: number; x1: number; y1: number }[] = [];
-  private sizeCheck = 0;
   private nextRattle = 0;
   /** Whether the hiss is currently sounding, so its onset "psh" fires once. */
   private hissOn = false;
   private errShown = false;
 
-  // Loop handles.
+  // Demand-driven animation; dormant once the paint and can settle.
   private raf: number | null = null;
-  private timer: ReturnType<typeof setInterval> | null = null;
-  private coverTimer: ReturnType<typeof setInterval> | null = null;
-  private fallbackT: ReturnType<typeof setTimeout> | null = null;
-  private rafFired = false;
   private destroyed = false;
 
   // Audio.
@@ -333,7 +352,16 @@ export class SprayEngine {
   private readonly onResize = () => this.resize();
   private readonly onPointerDown = (e: PointerEvent) => this.handleDown(e);
   private readonly onPointerMove = (e: PointerEvent) => this.handleMove(e);
-  private readonly onPointerUp = () => this.handleUp();
+  private readonly onPointerUp = (e: PointerEvent) => {
+    if (e.pointerId !== this.activePointer) return;
+    if (e.type === 'pointerup') this.handleMove(e);
+    this.handleUp();
+  };
+  private readonly onBlur = () => this.handleUp();
+  private readonly onVisibility = () => {
+    if (document.hidden) { this.handleUp(); this.stopLoop(); }
+    else { this.lastFrame = 0; this.startLoop(); }
+  };
 
   constructor(els: SprayElements, host: SprayHost) {
     this.els = els;
@@ -347,13 +375,19 @@ export class SprayEngine {
     window.addEventListener('resize', this.onResize);
     this.resize();
     this.bindPointer();
+    this.resizeObserver.observe(this.els.wrap);
+    this.controlsObserver.observe(this.els.controls);
+    this.controlsObserver.observe(this.els.canTabs.firstElementChild ?? this.els.canTabs);
     this.startLoop();
   }
 
   destroy(): void {
     this.destroyed = true;
+    this.handleUp();
     this.cancelCompletionHold();
     this.stopLoop();
+    this.resizeObserver.disconnect();
+    this.controlsObserver.disconnect();
     this.unbindPointer();
     window.removeEventListener('resize', this.onResize);
     if (this.actx) {
@@ -369,6 +403,7 @@ export class SprayEngine {
   /** Back to a blank wall: mask, drips, mist, meter and hint all reset. */
   clearWall(): void {
     this.cancelCompletionHold();
+    this.handleUp();
     const m = this.maskCtx;
     if (m) {
       m.save();
@@ -393,14 +428,16 @@ export class SprayEngine {
     this.finishing = false;
     this.floodT = 0;
     this.coverage = 0;
-    this.dirty = true;
+    this.invalidate();
+    this.floorDirty = true;
     this.host.onProgress(0);
-    this.hintHidden = false;
-    this.host.onHintVisibleChange(true);
+    this.painted = false;
+    this.host.onPaintedChange(false);
   }
 
   /** Called by React after `done` or `muted` flips so the can and hiss follow. */
   syncState(): void {
+    this.startLoop();
     this.placeCan(0);
     this.setHiss(this.ptr.down && !this.host.isDone() ? 0.16 : 0);
   }
@@ -412,6 +449,9 @@ export class SprayEngine {
     window.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointercancel', this.onPointerUp);
+    this.els.wrap.addEventListener('lostpointercapture', this.onPointerUp);
+    window.addEventListener('blur', this.onBlur);
+    document.addEventListener('visibilitychange', this.onVisibility);
   }
 
   private unbindPointer(): void {
@@ -419,47 +459,89 @@ export class SprayEngine {
     window.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointercancel', this.onPointerUp);
+    this.els.wrap.removeEventListener('lostpointercapture', this.onPointerUp);
+    window.removeEventListener('blur', this.onBlur);
+    document.removeEventListener('visibilitychange', this.onVisibility);
   }
 
   private handleDown(e: PointerEvent): void {
     const target = e.target as Element | null;
-    if (target?.closest('button, a')) return;
+    if (target?.closest('button, a, input') || e.button !== 0 || this.activePointer !== null) return;
+    if (this.host.isDone() || this.finishing || this.completing || !this.mural?.naturalWidth) return;
     this.engaged = true;
     this.setPtr(e);
+    if (this.nearControls || this.ptr.y > this.wallH) return;
+    this.activePointer = e.pointerId;
     this.ptr.down = true;
+    this.can.x = this.can.tx = this.ptr.x;
+    this.can.y = this.can.ty = this.ptr.y;
+    this.dwellTime = 0;
+    this.depositsSinceFrame = 0;
+    this.stroke = new StrokeSampler(Math.max(2, this.radius * 0.095), (point) => {
+      this.depositsSinceFrame++;
+      this.emit(point.x, point.y, this.radius * (0.8 + point.pressure * 0.2),
+        0.7 + point.pressure * 0.3, performance.now());
+    });
+    this.stroke.add(this.strokePoint());
     this.startAudio();
     if (this.actx?.state === 'suspended') void this.actx.resume().catch(() => {});
-    this.hideHint();
-    if (e.pointerId != null) {
-      try {
-        this.els.wrap.setPointerCapture(e.pointerId);
-      } catch {
-        /* capture is best-effort */
-      }
-    }
+    this.setHiss(0.16);
+    this.markPainted();
+    this.placeCan(0);
+    this.startLoop();
+    try { this.els.wrap.setPointerCapture(e.pointerId); } catch { /* synthetic input */ }
   }
 
   private handleMove(e: PointerEvent): void {
+    if (this.activePointer !== null && e.pointerId !== this.activePointer) return;
+    if (this.activePointer === null && e.pointerType === 'touch') return;
+    if (this.activePointer !== null && e.type === 'pointermove' && e.pointerType !== 'touch' && e.buttons === 0) {
+      this.handleUp();
+    }
     this.engaged = true;
-    this.setPtr(e);
-    this.startAudio();
+    const samples = e.getCoalescedEvents?.();
+    for (const point of samples?.length ? samples : [e]) {
+      this.setPtr(point);
+      if (this.ptr.down) {
+        if (this.nearControls || this.ptr.y > this.wallH || this.ptr.y < 0 || this.ptr.x < 0 || this.ptr.x > this.W) {
+          this.stroke?.end();
+        } else {
+          this.stroke?.add(this.strokePoint());
+        }
+      }
+    }
+    this.startLoop();
   }
 
   private handleUp(): void {
+    const id = this.activePointer;
+    this.activePointer = null;
     this.ptr.down = false;
+    this.stroke?.end();
+    this.stroke = null;
+    this.dwellTime = 0;
     this.setHiss(0);
+    if (id !== null && this.els.wrap.hasPointerCapture(id)) this.els.wrap.releasePointerCapture(id);
+    this.startLoop();
   }
 
   private setPtr(e: PointerEvent): void {
-    const r = this.els.wrap.getBoundingClientRect();
-    this.ptr.x = e.clientX - r.left;
-    this.ptr.y = e.clientY - r.top;
+    this.ptr.x = e.clientX - this.wrapLeft;
+    this.ptr.y = e.clientY - this.wrapTop;
+    this.pressure = e.pointerType === 'pen' ? Math.max(0.15, e.pressure) : 1;
   }
 
-  private hideHint(): void {
-    if (this.hintHidden) return;
-    this.hintHidden = true;
-    this.host.onHintVisibleChange(false);
+  private strokePoint(): StrokePoint {
+    return { x: this.ptr.x, y: this.ptr.y, pressure: this.pressure };
+  }
+
+  private markPainted(): void {
+    if (this.painted) return;
+    this.painted = true;
+    this.host.onPaintedChange(true);
+    // The art picker leaves with the hint, so the strip it occupied has to
+    // become sprayable in the same breath.
+    this.measureControls();
   }
 
   // --------------------------------------------------------------- completion
@@ -472,6 +554,7 @@ export class SprayEngine {
   private beginCompletionHold(): void {
     if (this.completing) return;
     this.completing = true;
+    this.handleUp();
     this.completeTimer = setTimeout(() => {
       this.completeTimer = null;
       if (this.destroyed) return;
@@ -490,14 +573,18 @@ export class SprayEngine {
   // ---------------------------------------------------------------- proximity
 
   /**
-   * Caches each control cluster in wrap-local space; they only move on resize.
-   * Clusters are kept apart rather than merged into one box: they sit at
-   * opposite ends of the bottom edge, and their union would swallow the whole
-   * strip between them.
+   * Caches each live control cluster in wrap-local space; they move on resize
+   * and when the art picker leaves. Clusters are kept apart rather than merged
+   * into one box: they sit at opposite ends of the bottom edge, and their union
+   * would swallow the whole strip between them.
    */
   private measureControls(): void {
     const wrap = this.els.wrap.getBoundingClientRect();
-    this.controlsBoxes = [this.els.controls, this.els.canTabs]
+    const clusters: Element[] = [this.els.controls];
+    // The picker fades out on the first mark. Its strip is wall again from that
+    // moment, so it leaves the list instead of sitting there as a dead zone.
+    if (!this.painted) clusters.push(this.els.canTabs.firstElementChild ?? this.els.canTabs);
+    this.controlsBoxes = clusters
       .map((el) => el.getBoundingClientRect())
       .filter((box) => box.width > 0 && box.height > 0)
       .map((box) => ({
@@ -523,7 +610,7 @@ export class SprayEngine {
    */
   private get radius(): number {
     const c = this.host.getConfig();
-    if (c.radius != null) return c.radius;
+    if (c.radius != null) return Math.max(4, Math.min(RADIUS_MAX, c.radius));
     // Measured against the artwork on screen, not the wall it hangs on. The two
     // are the same thing in landscape, where the mural covers the wall — but on
     // a portrait stage the piece sits in a band across the middle, and all the
@@ -560,6 +647,7 @@ export class SprayEngine {
     const { src } = this.host.getArt();
     if (src === this.muralSrc && this.mural) return;
     this.muralSrc = src;
+    this.airBrush = createSoftBrush(this.host.getArt().hues[0]);
 
     const img = new Image();
     img.src = artUrl(src);
@@ -570,7 +658,7 @@ export class SprayEngine {
       this.mural = img;
       this.buildInkMap();
       if (this.W) this.resize();
-      this.dirty = true;
+      this.invalidate();
     };
     if (img.complete && img.naturalWidth) apply();
     else img.addEventListener('load', apply, { once: true });
@@ -601,6 +689,7 @@ export class SprayEngine {
     x.drawImage(this.mural, 0, 0, SAMPLE_W, SAMPLE_H);
     const a = x.getImageData(0, 0, SAMPLE_W, SAMPLE_H).data;
 
+    this.muralPixels = a;
     this.ink = new Uint8Array(SAMPLE_W * SAMPLE_H);
     for (let i = 0; i < SAMPLE_W * SAMPLE_H; i++) {
       const l = 0.2126 * a[i * 4] + 0.7152 * a[i * 4 + 1] + 0.0722 * a[i * 4 + 2];
@@ -661,15 +750,22 @@ export class SprayEngine {
 
   // ------------------------------------------------------------------ geometry
 
+  private resizeIfNeeded(): void {
+    const box = this.els.wrap.getBoundingClientRect();
+    if (Math.abs(box.width - this.W) > 1 || Math.abs(box.height - this.H) > 1) this.resize();
+  }
+
   private resize(): void {
     const r = this.els.wrap.getBoundingClientRect();
+    this.wrapLeft = r.left;
+    this.wrapTop = r.top;
     this.W = Math.max(2, Math.round(r.width));
     this.H = Math.max(2, Math.round(r.height));
     // Floors of 1: mounting into a hidden or zero-size container would
     // otherwise round these to 0 and every drawImage of them would throw.
     this.floorH = Math.max(1, Math.round(this.H * FLOOR_RATIO));
     this.wallH = Math.max(1, this.H - this.floorH);
-    this.dpr = Math.min(1.6, window.devicePixelRatio || 1);
+    this.dpr = Math.min(1.6, window.devicePixelRatio || 1, Math.sqrt(2_800_000 / (this.W * this.wallH)));
 
     // Preserve the paint already on the wall across a viewport change.
     let keep: HTMLCanvasElement | null = null;
@@ -680,19 +776,19 @@ export class SprayEngine {
       keep.getContext('2d')!.drawImage(this.mask, 0, 0);
     }
 
-    const fit = (c: HTMLCanvasElement, w: number, h: number) => {
-      c.width = Math.max(1, Math.round(w * this.dpr));
-      c.height = Math.max(1, Math.round(h * this.dpr));
+    const fit = (c: HTMLCanvasElement, w: number, h: number, scale = this.dpr) => {
+      c.width = Math.max(1, Math.round(w * scale));
+      c.height = Math.max(1, Math.round(h * scale));
       const x = c.getContext('2d')!;
-      x.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      x.setTransform(c.width / w, 0, 0, c.height / h, 0, 0);
       return x;
     };
 
     this.pctx = fit(this.els.paint, this.W, this.wallH);
-    this.gctx = fit(this.els.glow, this.W, this.wallH);
-    this.wctx = fit(this.els.wet, this.W, this.wallH);
-    this.mctx = fit(this.els.mist, this.W, this.H);
-    this.fctx = fit(this.els.floor, this.W, this.floorH);
+    this.gctx = fit(this.els.glow, this.W, this.wallH, 0.22);
+    this.wctx = fit(this.els.wet, this.W, this.wallH, WET_SCALE);
+    this.mctx = fit(this.els.mist, this.W, this.H, Math.min(1, this.dpr));
+    this.fctx = fit(this.els.floor, this.W, this.floorH, 0.5);
     this.maskCtx = fit(this.mask, this.W, this.wallH);
     this.finkCtx = fit(this.fink, this.W, this.floorH);
     this.detailCtx = fit(this.detail, this.W, this.wallH);
@@ -704,12 +800,6 @@ export class SprayEngine {
       this.maskCtx.drawImage(keep, 0, 0, this.mask.width, this.mask.height);
       this.maskCtx.restore();
     }
-
-    // The bloom pass runs at ~1/5 scale and is blurred back up — far cheaper
-    // than blurring the full-resolution composite every frame.
-    this.glowSmall.width = Math.max(2, Math.round(this.W * 0.22));
-    this.glowSmall.height = Math.max(2, Math.round(this.wallH * 0.22));
-    this.gsctx = this.glowSmall.getContext('2d');
 
     // Wetness is a soft, slow-moving field, so it costs nothing to hold it at a
     // third of the wall's size and blur it back up.
@@ -743,9 +833,13 @@ export class SprayEngine {
 
     this.grain();
     this.measureControls();
+    this.handleUp();
     if (!this.engaged) this.parkCan();
     else this.clampCanIntoStage();
-    this.dirty = true;
+    this.bakeMural();
+    this.dirtyBounds = null;
+    this.floorDirty = true;
+    this.invalidate();
   }
 
   private parkCan(): void {
@@ -872,7 +966,7 @@ export class SprayEngine {
   // ------------------------------------------------------------------- reveal
 
   /**
-   * Samples the mask against the ink map every ~420ms. Once enough of the
+   * Samples changed paint against the ink map at most every 160ms. Once enough of the
    * artwork is uncovered, `finishing` takes over and floods the rest.
    */
   private measure(): void {
@@ -895,182 +989,95 @@ export class SprayEngine {
     const a = this.sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H).data;
     let hit = 0;
     for (let i = 0; i < SAMPLE_W * SAMPLE_H; i++) {
-      if (this.reachable[i] && a[i * 4 + 3] > 70) hit++;
+      if (this.reachable[i] && a[i * 4 + 3] > 110) hit++;
     }
     this.coverage = this.reachableCount ? hit / this.reachableCount : 0;
 
-    const configured = this.host.getConfig().threshold;
+    const configured = Math.max(0.01, Math.min(1, this.host.getConfig().threshold));
     const threshold = this.wallH > this.W ? Math.max(configured, PORTRAIT_THRESHOLD) : configured;
     this.host.onProgress(Math.min(1, this.coverage / threshold));
-    if (this.sprayed && this.coverage >= threshold) this.finishing = true;
+    if (this.sprayed && this.coverage >= threshold) {
+      this.finishing = true;
+      this.handleUp();
+    }
   }
 
   // -------------------------------------------------------------------- paint
 
-  /**
-   * One aerosol stamp: a soft core gradient plus scattered droplets that thin
-   * out toward the edge, and the odd stray fleck outside the cone.
-   */
+  /** Union of changed paint; the sharp mural only redraws this rectangle. */
+  private invalidate(x = 0, y = 0, width = this.W, height = this.wallH): void {
+    const left = Math.max(0, Math.floor(x));
+    const top = Math.max(0, Math.floor(y));
+    const right = Math.min(this.W, Math.ceil(x + width));
+    const bottom = Math.min(this.wallH, Math.ceil(y + height));
+    if (right <= left || bottom <= top) return;
+    const b = this.dirtyBounds;
+    this.dirtyBounds = b ? { x: Math.min(b.x, left), y: Math.min(b.y, top),
+      right: Math.max(b.right, right), bottom: Math.max(b.bottom, bottom) } : { x: left, y: top, right, bottom };
+    this.dirty = true;
+    this.coverageDirty = true;
+    this.startLoop();
+  }
+
   private stamp(x: number, y: number, r: number, strength: number): void {
     const m = this.maskCtx;
     if (!m) return;
+    const extent = r * (128 / 98);
+    m.globalAlpha = Math.min(1, strength);
+    m.drawImage(this.brushes[this.brushIndex++ % this.brushes.length], x - extent, y - extent, extent * 2, extent * 2);
+    m.globalAlpha = 1;
 
-    m.save();
-    const g = m.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, `rgba(255,255,255,${(0.15 * strength).toFixed(3)})`);
-    g.addColorStop(0.5, `rgba(255,255,255,${(0.075 * strength).toFixed(3)})`);
-    g.addColorStop(1, 'rgba(255,255,255,0)');
-    m.fillStyle = g;
-    m.beginPath();
-    m.arc(x, y, r, 0, TAU);
-    m.fill();
-
-    m.fillStyle = '#fff';
-    const scale = Math.min(2, Math.max(1, r / 54));
-
-    // Body droplets, uniform over the disc and thinning outward.
-    const n = Math.round(34 * scale);
-    for (let i = 0; i < n; i++) {
-      const ang = Math.random() * TAU;
-      const t = Math.sqrt(Math.random()); // uniform over the disc
-      const rr = r * t * 1.12;
-      const px = x + Math.cos(ang) * rr;
-      const py = y + Math.sin(ang) * rr;
-      const sz = 0.4 + Math.random() * 1.9 * (1 - t * 0.55);
-      m.globalAlpha = (0.08 + Math.random() * 0.5) * strength * (1 - t * 0.62);
-      m.beginPath();
-      m.arc(px, py, sz, 0, TAU);
-      m.fill();
-    }
-
-    // A grainy rim concentrated around the cone edge. Without this the stamp
-    // ends in a clean gradient, which reads as wiping something clean rather
-    // than as atomised paint landing on concrete.
-    const rim = Math.round(30 * scale);
-    for (let i = 0; i < rim; i++) {
-      const ang = Math.random() * TAU;
-      const rr = r * (0.72 + Math.random() * 0.46);
-      const sz = 0.28 + Math.random() * 1.05;
-      m.globalAlpha = (0.05 + Math.random() * 0.3) * strength;
-      m.beginPath();
-      m.arc(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr, sz, 0, TAU);
-      m.fill();
-    }
-
-    // Overspray: the fine dust that drifts past the cone and settles.
-    const dust = 3 + ((Math.random() * 4) | 0);
-    for (let i = 0; i < dust; i++) {
-      const ang = Math.random() * TAU;
-      const rr = r * (1.18 + Math.random() * 1.15);
-      m.globalAlpha = (0.03 + Math.random() * 0.16) * strength;
-      m.beginPath();
-      m.arc(x + Math.cos(ang) * rr, y + Math.sin(ang) * rr, 0.3 + Math.random() * 1.3, 0, TAU);
-      m.fill();
-    }
-    m.restore();
-
-    // Mark the paint as freshly wet. Written at the same moment as the pigment
-    // so the sheen sits exactly on the stroke, not near it.
     const wc = this.wetCtx;
     if (wc) {
-      const wr = r * WET_SCALE * 1.15;
-      const wx = x * WET_SCALE;
-      const wy = y * WET_SCALE;
-      const grad = wc.createRadialGradient(wx, wy, 0, wx, wy, Math.max(1, wr));
-      grad.addColorStop(0, `rgba(255,255,255,${(0.5 * strength).toFixed(3)})`);
-      grad.addColorStop(0.55, `rgba(255,255,255,${(0.26 * strength).toFixed(3)})`);
-      grad.addColorStop(1, 'rgba(255,255,255,0)');
-      wc.fillStyle = grad;
-      wc.beginPath();
-      wc.arc(wx, wy, Math.max(1, wr), 0, TAU);
-      wc.fill();
+      const wr = r * WET_SCALE;
+      wc.globalAlpha = Math.min(1, strength * 0.65);
+      wc.drawImage(this.wetBrush, x * WET_SCALE - wr, y * WET_SCALE - wr, wr * 2, wr * 2);
+      wc.globalAlpha = 1;
       this.wetLevel = 1;
       this.wetBlank = false;
     }
-
-    // Track paint build-up per cell; saturated cells start to run.
     const ci = Math.floor(x / this.cell);
     const ri = Math.floor(y / this.cell);
     if (ci >= 0 && ri >= 0 && ci < this.cols && ri < this.rows) {
       const k = ri * this.cols + ci;
       this.dens[k] += strength * 0.22;
-      if (this.host.getConfig().drips && this.dens[k] > 2.1 && this.drips.length < 52 && Math.random() < 0.14) {
+      if (this.host.getConfig().drips && this.dens[k] > 2.8 && this.drips.length < 32 && Math.random() < 0.14) {
         this.dens[k] = 0.5;
-        this.drips.push({
-          x: x + (Math.random() * 12 - 6),
-          y: y + r * 0.35,
-          r: 1.5 + Math.random() * 2.4,
-          v: 0.22 + Math.random() * 0.5,
-          age: 0,
-          life: 260 + Math.random() * 460,
-        });
+        this.drips.push({ x: x + Math.random() * 12 - 6, y: y + r * 0.35,
+          r: 1 + Math.random() * 1.8, v: 0.22 + Math.random() * 0.5, age: 0, life: 140 + Math.random() * 180 });
       }
     }
-    this.dirty = true;
+    this.invalidate(x - extent - 2, y - extent - 2, extent * 2 + 4, extent * 2 + 4);
   }
 
-  /**
-   * Interpolates along the pointer's travel so fast drags stay solid, emitting
-   * each puff into the flight queue rather than painting it immediately.
-   */
-  private spray(now: number): void {
-    const nx = this.can.x;
-    const ny = this.can.y;
-    if (ny > this.wallH + 40) return;
-
+  /** Dwell builds pigment on the clock; movement is sampled directly from input. */
+  private spray(now: number, dt: number): void {
     const radius = this.radius;
-    // Catches a `radiusScale` change that arrived without a resize.
-    if (this.cell !== Math.max(8, Math.round(radius * CELL_PER_RADIUS))) {
-      this.rebuildDensity(radius);
+    if (this.cell !== Math.max(8, Math.round(radius * CELL_PER_RADIUS))) this.rebuildDensity(radius);
+    this.dwellTime = Math.max(0, this.dwellTime + dt - this.depositsSinceFrame / 60);
+    while (this.dwellTime >= 1 / 60) {
+      this.emit(this.ptr.x, this.ptr.y, radius * (0.8 + this.pressure * 0.2),
+        0.7 + this.pressure * 0.3, now);
+      this.dwellTime -= 1 / 60;
     }
-    const last = this.lastStamp;
-    if (last) {
-      const dx = nx - last.x;
-      const dy = ny - last.y;
-      const dist = Math.hypot(dx, dy);
-      const step = Math.max(2.6, radius * 0.14);
-      const steps = Math.min(60, Math.floor(dist / step));
-      // Sweeping quickly lays down less paint per unit distance.
-      const speedFade = Math.min(1, 26 / (dist + 8));
-      for (let i = 1; i <= steps; i++) {
-        this.emit(
-          last.x + dx * (i / steps),
-          last.y + dy * (i / steps),
-          radius * (0.92 + Math.random() * 0.16),
-          0.55 + 0.45 * speedFade,
-          now,
-        );
-      }
-      if (steps === 0) this.emit(nx, ny, radius * (0.94 + Math.random() * 0.12), 1, now);
-    } else {
-      this.emit(nx, ny, radius, 1, now);
-    }
-    this.lastStamp = { x: nx, y: ny };
-
-    // Spatter thrown off the cone. It leaves fast in every direction, carries a
-    // little of the stroke's own travel, and then falls — paint coming off a
-    // nozzle, not exhaust.
+    this.particleTime += dt * (this.reducedMotion ? 80 : 220);
+    const count = Math.floor(this.particleTime);
+    this.particleTime -= count;
     const hues = this.host.getArt().hues;
-    const dragX = last ? nx - last.x : 0;
-    const dragY = last ? ny - last.y : 0;
-    for (let i = 0; i < (radius > 80 ? 16 : 11); i++) {
-      const ang = Math.random() * TAU;
-      const sp = 0.7 + Math.random() * 3.6;
-      // A few fat drops among the atomised mass, as a real cone throws.
-      const heavy = Math.random() < 0.16;
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * TAU;
+      const speed = 0.5 + Math.random() * 2;
       this.droplets.push({
-        x: nx + (Math.random() - 0.5) * radius * 0.55,
-        y: ny + (Math.random() - 0.5) * radius * 0.55,
-        vx: Math.cos(ang) * sp + dragX * 0.16,
-        vy: Math.sin(ang) * sp * 0.7 + dragY * 0.16,
-        r: heavy ? 1.5 + Math.random() * 2.1 : 0.45 + Math.random() * 1.15,
-        a: 0.55 + Math.random() * 0.4,
-        life: 1,
-        decay: heavy ? 0.03 + Math.random() * 0.02 : 0.055 + Math.random() * 0.05,
-        h: hues[(Math.random() * hues.length) | 0],
+        x: this.ptr.x + Math.cos(angle) * radius * Math.random() * 0.65,
+        y: this.ptr.y + Math.sin(angle) * radius * Math.random() * 0.65,
+        vx: Math.cos(angle) * speed + this.canVx * 0.04,
+        vy: Math.sin(angle) * speed * 0.6 + this.canVy * 0.04,
+        r: 0.4 + Math.random() * 1.1, a: 0.22 + Math.random() * 0.34,
+        life: 1, decay: 0.045 + Math.random() * 0.045,
+        h: hues[i % hues.length],
       });
     }
-    if (this.droplets.length > 420) this.droplets.splice(0, this.droplets.length - 420);
+    if (this.droplets.length > 160) this.droplets.splice(0, this.droplets.length - 160);
   }
 
   /**
@@ -1079,6 +1086,11 @@ export class SprayEngine {
    * stroke its trailing edge.
    */
   private emit(x: number, y: number, r: number, strength: number, now: number): void {
+    if (this.host.getConfig().sprayDelay <= 0) {
+      this.stamp(x, y, r, strength);
+      this.sprayed = true;
+      return;
+    }
     this.pending.push({ x, y, r, strength, due: now + this.host.getConfig().sprayDelay });
     if (this.pending.length > 1500) this.pending.splice(0, this.pending.length - 1500);
   }
@@ -1104,36 +1116,26 @@ export class SprayEngine {
   // --------------------------------------------------------------------- loop
 
   private startLoop(): void {
-    this.stopLoop();
-    this.rafFired = false;
-    const tick = (t: number) => {
-      this.rafFired = true;
-      this.raf = requestAnimationFrame(tick);
-      this.run(t);
-    };
-    this.raf = requestAnimationFrame(tick);
-
-    // Some embedded/background contexts never fire rAF — fall back to a timer
-    // so the wall is never inert.
-    this.fallbackT = setTimeout(() => {
-      if (this.rafFired || this.destroyed) return;
-      if (this.raf) cancelAnimationFrame(this.raf);
+    if (this.raf !== null || this.destroyed || document.hidden) return;
+    this.raf = requestAnimationFrame((t) => {
       this.raf = null;
-      this.timer = setInterval(() => this.run(performance.now()), 32);
-    }, 500);
-
-    this.coverTimer = setInterval(() => this.measure(), 420);
+      this.run(t);
+      const unsettled = Math.hypot(this.can.x - this.can.tx, this.can.y - this.can.ty) > 0.1;
+      if (this.ptr.down || this.dirty || this.coverageDirty || this.finishing || this.pending.length ||
+        this.drips.length || this.floorDrips.length || this.droplets.length || !this.wetBlank || unsettled ||
+        Math.abs(this.lampOpacity - this.lampTarget) > 0.002 || this.canSettling) this.startLoop();
+      else this.lastFrame = 0;
+    });
   }
 
   private stopLoop(): void {
-    if (this.raf) cancelAnimationFrame(this.raf);
-    if (this.timer) clearInterval(this.timer);
-    if (this.coverTimer) clearInterval(this.coverTimer);
-    if (this.fallbackT) clearTimeout(this.fallbackT);
+    if (this.raf !== null) cancelAnimationFrame(this.raf);
     this.raf = null;
-    this.timer = null;
-    this.coverTimer = null;
-    this.fallbackT = null;
+  }
+
+  private canSettling = false;
+  private get lampTarget(): number {
+    return this.host.isDone() ? 0 : this.ptr.down ? 0.8 : this.engaged ? 0.42 : 0.24;
   }
 
   private run(t: number): void {
@@ -1149,24 +1151,17 @@ export class SprayEngine {
   }
 
   private frame(now: number): void {
-    if (!this.pctx || !this.mctx || !this.gctx || !this.maskCtx || !this.gsctx) {
+    if (!this.pctx || !this.mctx || !this.gctx || !this.maskCtx) {
       this.resize();
       return;
     }
-    // Cheap poll for container resizes that don't fire a window resize event.
-    if (++this.sizeCheck > 20) {
-      this.sizeCheck = 0;
-      const r = this.els.wrap.getBoundingClientRect();
-      if (Math.abs(r.width - this.W) > 1 || Math.abs(r.height - this.H) > 1) this.resize();
-    }
-
     const done = this.host.isDone();
     const W = this.W;
     const wallH = this.wallH;
     // Real elapsed time, so paint dries on the clock rather than on the frame
     // count — a throttled tab would otherwise keep the wall wet for minutes.
     // The cap only guards against the jump back from a long background pause.
-    const dt = this.lastFrame ? Math.min(1, (now - this.lastFrame) / 1000) : 0.016;
+    const dt = this.lastFrame ? Math.min(0.05, Math.max(0.001, (now - this.lastFrame) / 1000)) : 0.016;
     this.lastFrame = now;
 
     // The can chases the pointer with easing, and tilts into its own velocity.
@@ -1174,7 +1169,7 @@ export class SprayEngine {
       this.can.tx = this.ptr.x;
       this.can.ty = this.ptr.y;
     }
-    const ease = this.engaged ? 0.34 : 0.06;
+    const ease = this.ptr.down ? 1 : 1 - Math.exp(-dt * (this.engaged ? 32 : 8));
     const px = this.can.x;
     const py = this.can.y;
     this.can.x += (this.can.tx - this.can.x) * ease;
@@ -1182,9 +1177,9 @@ export class SprayEngine {
     const vx = this.can.x - px;
     const vy = this.can.y - py;
     // Kept for the jet, which trails behind the nozzle as the can travels.
-    this.canVx = vx;
-    this.canVy = vy;
-    let targetRot = Math.max(-26, Math.min(26, vx * 1.5)) + (this.engaged ? 9 : 0);
+    this.canVx = vx / (dt * 60);
+    this.canVy = vy / (dt * 60);
+    let targetRot = Math.max(-26, Math.min(26, this.canVx * 0.85)) + (this.engaged ? 9 : 0);
 
     // The can hangs below the nozzle, so a touch low on a short screen runs the
     // body off the bottom edge — very easy to do with a thumb on a phone.
@@ -1206,7 +1201,9 @@ export class SprayEngine {
       const edgeRot = away * Math.min(CAN_MAX_TILT, need);
       if (Math.abs(edgeRot) > Math.abs(targetRot)) targetRot = edgeRot;
     }
-    this.can.rot += (targetRot - this.can.rot) * 0.16;
+    if (this.reducedMotion) targetRot = 0;
+    this.can.rot += (targetRot - this.can.rot) * (1 - Math.exp(-dt * 14));
+    this.canSettling = Math.abs(targetRot - this.can.rot) > 0.1;
 
     // Moving the can without spraying shakes the ball bearing.
     const speed = Math.hypot(vx, vy);
@@ -1218,26 +1215,22 @@ export class SprayEngine {
       }
     }
 
-    this.placeCan(this.ptr.down ? Math.sin(now / 22) * 1.6 : 0);
+    this.placeCan(0);
 
-    // Only spray once the can has caught up with the cursor, and never while
-    // reaching for the buttons or during the hold on the finished mural.
-    const settled = Math.hypot(this.can.x - this.ptr.x, this.can.y - this.ptr.y) < 70;
-    const near = this.nearControls;
-    if (this.ptr.down && settled && !done && !this.finishing && !this.completing && !near) {
-      this.spray(now);
+    const spraying = this.ptr.down && this.stroke?.active && !done && !this.finishing && !this.completing;
+    if (spraying) {
+      this.spray(now, dt);
       this.setHiss(0.16);
-    } else {
-      this.lastStamp = null;
-      if (!this.ptr.down || near || this.completing) this.setHiss(0);
-    }
+    } else this.setHiss(0);
+    this.depositsSinceFrame = 0;
+    this.els.wrap.dataset.spraying = spraying ? 'true' : 'false';
 
     if (this.finishing) {
-      this.floodT += 0.016;
-      this.maskCtx.fillStyle = 'rgba(255,255,255,0.055)';
+      this.floodT += dt;
+      this.maskCtx.fillStyle = `rgba(255,255,255,${1 - Math.exp(-dt * 4.8)})`;
       this.maskCtx.fillRect(0, 0, W, wallH);
-      this.dirty = true;
-      if (this.floodT >= 1) {
+      this.invalidate();
+      if (this.floodT >= (this.reducedMotion ? 0.2 : 0.85)) {
         this.maskCtx.fillStyle = '#fff';
         this.maskCtx.fillRect(0, 0, W, wallH);
         this.finishing = false;
@@ -1251,19 +1244,27 @@ export class SprayEngine {
     // After spray(), so a zero delay still lands paint on the same frame.
     this.landPaint(now);
 
-    this.stepDrips(wallH);
-    this.stepFloorDrips();
+    this.stepDrips(wallH, dt * 60);
+    this.stepFloorDrips(dt * 60);
 
     if (this.dirty) {
       this.compose(W, wallH);
       this.dirty = false;
     }
 
-    this.drawWet(dt);
-    this.placeLamp(done);
-
-    this.els.glow.style.opacity = done ? (0.62 + Math.sin(now / 900) * 0.16).toFixed(3) : '0.5';
-    this.drawAirborne(done, now);
+    if (this.floorDirty) { this.drawFloor(); this.floorDirty = false; }
+    this.wetElapsed += dt;
+    if (this.wetElapsed >= 1 / 60 || this.wetLevel === 0) {
+      this.drawWet(this.wetElapsed);
+      this.wetElapsed = 0;
+    }
+    this.placeLamp(dt);
+    this.drawAirborne(!spraying, now, dt * 60);
+    if (this.coverageDirty && now - this.lastMeasure >= 160) {
+      this.coverageDirty = false;
+      this.lastMeasure = now;
+      this.measure();
+    }
   }
 
   /**
@@ -1312,9 +1313,7 @@ export class SprayEngine {
     w.clearRect(0, 0, this.els.wet.width, this.els.wet.height);
     w.restore();
 
-    w.filter = 'blur(4px)';
     w.drawImage(this.wetMap, 0, 0, this.W, this.wallH);
-    w.filter = 'none';
 
     // Only pigment shines. Without this the sheen sits on bare concrete too and
     // the whole thing reads as a torch rather than as wet paint.
@@ -1329,29 +1328,30 @@ export class SprayEngine {
    * already drawn, and a soft-light blend over them lifts that texture into
    * relief far more cheaply than relighting it per pixel would.
    */
-  private placeLamp(done: boolean): void {
+  private placeLamp(dt: number): void {
     const l = this.els.lamp.style;
     // Sits a little above the nozzle: the light source is the can in your hand,
     // not the jet leaving it.
     l.transform = `translate3d(${(this.can.x - this.W / 2).toFixed(1)}px, ${(this.can.y - 26 - this.wallH / 2).toFixed(1)}px, 0)`;
     // Brightest while spraying, dim while the can is just being carried, gone
     // once the wall is finished and the flood takes over.
-    const want = done ? 0 : this.ptr.down ? 1 : this.engaged ? 0.62 : 0.34;
+    const want = this.lampTarget;
     const have = this.lampOpacity;
-    this.lampOpacity = have + (want - have) * 0.12;
+    this.lampOpacity = have + (want - have) * (1 - Math.exp(-dt * 12));
     l.opacity = this.lampOpacity.toFixed(3);
   }
 
   /** Advances wall drips, painting them straight into the reveal mask. */
-  private stepDrips(wallH: number): void {
+  private stepDrips(wallH: number, step: number): void {
     const m = this.maskCtx;
     if (!m) return;
     for (let i = this.drips.length - 1; i >= 0; i--) {
       const d = this.drips[i];
-      d.age++;
-      d.v = Math.min(3.4, d.v * 1.016);
-      d.y += d.v;
-      d.x += Math.sin(d.y * 0.045) * 0.22;
+      d.age += step;
+      d.v = Math.min(2.6, d.v * Math.pow(1.016, step));
+      const oldY = d.y;
+      d.y += d.v * step;
+      d.x += Math.sin(d.y * 0.045) * 0.12 * step;
       const k = 1 - d.age / d.life;
 
       m.save();
@@ -1367,7 +1367,7 @@ export class SprayEngine {
         m.fill();
       }
       m.restore();
-      this.dirty = true;
+      this.invalidate(d.x - d.r * 2, oldY - d.r * 2, d.r * 4, d.y - oldY + d.r * 4);
 
       if (d.y > wallH - 1) {
         this.spawnFloorDrip(d.x, d.r);
@@ -1381,12 +1381,13 @@ export class SprayEngine {
   /** Reads the mural colour at the foot of the wall so drips match the art. */
   private paintColorAt(x: number): string {
     const fallback = this.host.getArt().splat;
-    if (!this.pctx) return fallback;
+    if (!this.muralPixels) return fallback;
     try {
-      const px = Math.max(0, Math.min(this.els.paint.width - 1, Math.round(x * this.dpr)));
-      const py = Math.max(0, Math.round((this.wallH - 5) * this.dpr));
-      const d = this.pctx.getImageData(px, py, 1, 1).data;
-      if (d[3] > 24 && d[0] + d[1] + d[2] > 40) return `${d[0]},${d[1]},${d[2]}`;
+      const px = Math.max(0, Math.min(SAMPLE_W - 1, Math.floor((x - this.mx) / this.mw * SAMPLE_W)));
+      const py = Math.max(0, Math.min(SAMPLE_H - 1, Math.floor((this.wallH - 5 - this.my) / this.mh * SAMPLE_H)));
+      const i = (py * SAMPLE_W + px) * 4;
+      const d = this.muralPixels;
+      if (d[i] + d[i + 1] + d[i + 2] > 40) return `${d[i]},${d[i + 1]},${d[i + 2]}`;
     } catch {
       /* tainted or zero-sized canvas — fall through */
     }
@@ -1409,11 +1410,11 @@ export class SprayEngine {
       maxPool: 3.5 + Math.random() * 9,
       drift: (Math.random() - 0.5) * 0.32,
     });
-    this.dirty = true;
+    this.floorDirty = true;
   }
 
   /** Runs a drip down the floor, then lets it spread into a flattened pool. */
-  private stepFloorDrips(): void {
+  private stepFloorDrips(step: number): void {
     const f = this.finkCtx;
     if (!f || !this.floorDrips.length) return;
     const H = this.floorH;
@@ -1423,9 +1424,9 @@ export class SprayEngine {
       if (d.y < d.stop) {
         d.py = d.y;
         d.px = d.x;
-        d.y += d.v;
-        d.x += d.drift;
-        d.v *= 0.976;
+        d.y += d.v * step;
+        d.x += d.drift * step;
+        d.v = Math.max(0.18, d.v * Math.pow(0.976, step));
         // Widen as it travels "toward" the viewer.
         const persp = 1 + (d.y / H) * 1.9;
         f.save();
@@ -1438,7 +1439,7 @@ export class SprayEngine {
         f.stroke();
         f.restore();
       } else {
-        d.pool += 0.14;
+        d.pool += 0.14 * step;
         const r = Math.min(d.maxPool, d.pool);
         f.save();
         f.translate(d.x, d.y);
@@ -1455,97 +1456,84 @@ export class SprayEngine {
         f.restore();
         if (d.pool >= d.maxPool) this.floorDrips.splice(i, 1);
       }
-      this.dirty = true;
+      this.floorDirty = true;
     }
   }
 
-  /**
-   * Builds the wall in two coats so the wall reads as *painted*, not wiped
-   * clean:
-   *
-   *  1. wet coat — soft, saturated colour at the mask's own alpha, so the first
-   *     pass over bare concrete leaves pigment rather than finished artwork;
-   *  2. detail coat — the sharp mural at alpha squared, so the artwork only
-   *     resolves where paint has actually built up.
-   *
-   * Squaring is just the mask drawn into itself with `destination-in`.
-   */
+  /** Rasterise the fitted artwork once; strokes only mask these cached coats. */
+  private bakeMural(): void {
+    for (const canvas of [this.coat, this.sharp]) {
+      canvas.width = this.els.paint.width;
+      canvas.height = this.els.paint.height;
+    }
+    if (!this.mural?.naturalWidth) return;
+    const p = this.coat.getContext('2d')!;
+    p.setTransform(this.coat.width / this.W, 0, 0, this.coat.height / this.wallH, 0, 0);
+    p.imageSmoothingQuality = 'high';
+    const sw = this.muralSoft.width;
+    const sh = this.muralSoft.height;
+    p.drawImage(this.muralSoft, 0, 0, sw, 1, this.mx, 0, this.mw, this.wallH);
+    const foot = this.my + this.mh;
+    if (foot < this.wallH) p.drawImage(this.muralSoft, 0, sh - 1, sw, 1, this.mx, foot, this.mw, this.wallH - foot);
+    p.drawImage(this.muralSoft, this.mx, this.my, this.mw, this.mh);
+    if (this.my > 0) {
+      const top = p.createLinearGradient(0, 0, 0, this.my);
+      top.addColorStop(0, 'rgba(0,0,0,0.92)');
+      top.addColorStop(1, 'rgba(0,0,0,0)');
+      p.fillStyle = top;
+      p.fillRect(0, 0, this.W, this.my);
+    }
+    if (foot < this.wallH) {
+      const bottom = p.createLinearGradient(0, foot, 0, this.wallH);
+      bottom.addColorStop(0, 'rgba(0,0,0,0)');
+      bottom.addColorStop(1, 'rgba(0,0,0,0.92)');
+      p.fillStyle = bottom;
+      p.fillRect(0, foot, this.W, this.wallH - foot);
+    }
+    const d = this.sharp.getContext('2d')!;
+    d.setTransform(this.sharp.width / this.W, 0, 0, this.sharp.height / this.wallH, 0, 0);
+    d.imageSmoothingQuality = 'high';
+    d.drawImage(this.mural, this.mx, this.my, this.mw, this.mh);
+  }
+
+  /** Redraw only changed pigment. Soft colour resolves into detail as it builds. */
   private compose(W: number, wallH: number): void {
+    const b = this.dirtyBounds ?? { x: 0, y: 0, right: W, bottom: wallH };
+    // CSS-pixel bounds are fractional in the backing canvas on Retina displays.
+    // A fractional clip/clear blends old and new paint along every rectangle edge.
+    // All sharp buffers share a size: copy their integer backing pixels 1:1.
+    const { x, y, width, height } = paintRegion(b, W, wallH, this.mask.width, this.mask.height);
+    const draw = (ctx: CanvasRenderingContext2D, source: HTMLCanvasElement) => {
+      ctx.drawImage(source, x, y, width, height, x, y, width, height);
+    };
     const p = this.pctx!;
-    const muralReady = !!(this.mural?.complete && this.mural.naturalWidth);
-    p.save();
-    p.setTransform(1, 0, 0, 1, 0, 0);
-    p.clearRect(0, 0, this.els.paint.width, this.els.paint.height);
+    const d = this.detailCtx!;
+    // Porter-Duff compositing clears outside its source; clipping keeps prior strokes intact.
+    for (const ctx of [p, d]) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.beginPath();
+      ctx.rect(x, y, width, height);
+      ctx.clip();
+      ctx.clearRect(x, y, width, height);
+      draw(ctx, this.mask);
+    }
+    p.globalCompositeOperation = 'source-in';
+    draw(p, this.coat);
+    p.globalCompositeOperation = 'source-over';
+    d.globalCompositeOperation = 'destination-in';
+    draw(d, this.mask);
+    d.globalCompositeOperation = 'source-in';
+    draw(d, this.sharp);
+    d.restore();
+    draw(p, this.detail);
     p.restore();
-
-    p.drawImage(this.mask, 0, 0, W, wallH);
-    if (muralReady) {
-      p.globalCompositeOperation = 'source-in';
-      p.imageSmoothingEnabled = true;
-      p.imageSmoothingQuality = 'high';
-      // Where the capped fit leaves the mural short of the wall, its own top
-      // and bottom rows are stretched into the gap: the piece runs off the edge
-      // in its own colours instead of stopping on a line, and a pass up there
-      // still lays paint. The first draw has to cover the whole wall — anything
-      // `source-in` misses is cleared — so the top row lays the ground.
-      const sw = this.muralSoft.width;
-      const sh = this.muralSoft.height;
-      p.drawImage(this.muralSoft, 0, 0, sw, 1, this.mx, 0, this.mw, wallH);
-      p.globalCompositeOperation = 'source-atop';
-      const foot = this.my + this.mh;
-      if (foot < wallH) {
-        p.drawImage(this.muralSoft, 0, sh - 1, sw, 1, this.mx, foot, this.mw, wallH - foot);
-      }
-      // The wet coat, in register with the detail coat that follows.
-      p.drawImage(this.muralSoft, this.mx, this.my, this.mw, this.mh);
-      // Sink the stretched rows into shadow toward the edges, so they read as
-      // the piece falling off into the dark rather than as smeared pixels.
-      if (this.my > 0) {
-        const top = p.createLinearGradient(0, 0, 0, this.my);
-        top.addColorStop(0, 'rgba(0,0,0,0.92)');
-        top.addColorStop(1, 'rgba(0,0,0,0)');
-        p.fillStyle = top;
-        p.fillRect(0, 0, W, this.my);
-      }
-      if (foot < wallH) {
-        const bottom = p.createLinearGradient(0, foot, 0, wallH);
-        bottom.addColorStop(0, 'rgba(0,0,0,0)');
-        bottom.addColorStop(1, 'rgba(0,0,0,0.92)');
-        p.fillStyle = bottom;
-        p.fillRect(0, foot, W, wallH - foot);
-      }
-      p.globalCompositeOperation = 'source-over';
-    }
-
-    const d = this.detailCtx;
-    if (muralReady && d) {
-      d.save();
-      d.setTransform(1, 0, 0, 1, 0, 0);
-      d.clearRect(0, 0, this.detail.width, this.detail.height);
-      d.restore();
-      d.drawImage(this.mask, 0, 0, W, wallH);
-      d.globalCompositeOperation = 'destination-in';
-      d.drawImage(this.mask, 0, 0, W, wallH);
-      d.globalCompositeOperation = 'source-in';
-      d.drawImage(this.mural!, this.mx, this.my, this.mw, this.mh);
-      d.globalCompositeOperation = 'source-over';
-      p.drawImage(this.detail, 0, 0, W, wallH);
-    }
-
-    const gs = this.gsctx!;
-    gs.clearRect(0, 0, this.glowSmall.width, this.glowSmall.height);
-    gs.drawImage(this.els.paint, 0, 0, this.glowSmall.width, this.glowSmall.height);
+    this.dirtyBounds = null;
 
     const g = this.gctx!;
-    g.save();
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.clearRect(0, 0, this.els.glow.width, this.els.glow.height);
-    g.restore();
-    g.filter = 'blur(9px)';
-    g.drawImage(this.glowSmall, 0, 0, W, wallH);
-    g.filter = 'none';
-
-    this.drawFloor();
+    g.clearRect(0, 0, W, wallH);
+    g.drawImage(this.els.paint, 0, 0, W, wallH);
+    if (b.bottom >= wallH - this.floorH * 1.6) this.floorDirty = true;
   }
 
   /** Mirrored, blurred reflection of the wall, fading out toward the viewer. */
@@ -1583,47 +1571,25 @@ export class SprayEngine {
     f.drawImage(this.fink, 0, 0, W, H);
   }
 
-  /**
-   * Pigment still in the air, drawn where it is about to land. It fades in over
-   * the packet's flight and hands off to real paint on arrival, so a stroke has
-   * a visible cloud of paint running ahead of the wet edge.
-   */
   private drawInFlight(m: CanvasRenderingContext2D, now: number): void {
     const delay = this.host.getConfig().sprayDelay;
     if (delay <= 0) return;
-    const hues = this.host.getArt().hues;
-    const tail = hues[1] || hues[0];
-    // Only the most recent packets matter visually, and this bounds the cost.
-    const from = Math.max(0, this.pending.length - 90);
-    for (let i = from; i < this.pending.length; i++) {
+    for (let i = Math.max(0, this.pending.length - 24); i < this.pending.length; i++) {
       const p = this.pending[i];
-      const t = 1 - (p.due - now) / delay; // 0 at the nozzle, 1 on landing
+      const t = 1 - (p.due - now) / delay;
       if (t <= 0 || t >= 1) continue;
-      const a = Math.sin(Math.PI * t) * 0.5 * p.strength;
-      if (a < 0.01) continue;
-      // Strands, not a disc: the packet arrives as a handful of streaks flung
-      // out from its centre, spreading as it closes on the wall.
-      const r = p.r * (0.35 + t * 0.7);
-      const h = (i & 1) === 0 ? hues[0] : tail;
-      m.strokeStyle = `rgba(${h},${a.toFixed(3)})`;
-      m.lineWidth = 0.8 + p.r * 0.035;
-      m.beginPath();
-      for (let s = 0; s < 3; s++) {
-        const ang = Math.random() * TAU;
-        const cos = Math.cos(ang);
-        const sin = Math.sin(ang);
-        const r0 = r * (0.15 + Math.random() * 0.4);
-        const r1 = r0 + r * (0.25 + Math.random() * 0.55);
-        m.moveTo(p.x + cos * r0, p.y + sin * r0);
-        m.lineTo(p.x + cos * r1, p.y + sin * r1);
-      }
-      m.stroke();
+      m.globalAlpha = Math.sin(Math.PI * t) * 0.16;
+      m.drawImage(this.airBrush, p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
     }
+    m.globalAlpha = 1;
   }
 
   /** Spatter in the air plus the wet spot the cone is laying down. */
-  private drawAirborne(done: boolean, now: number): void {
+  private drawAirborne(done: boolean, now: number, step: number): void {
     const m = this.mctx!;
+    const hasMist = !done || this.droplets.length > 0 || this.pending.length > 0;
+    if (!hasMist && this.mistBlank) return;
+    this.mistBlank = !hasMist;
     m.save();
     m.setTransform(1, 0, 0, 1, 0, 0);
     m.clearRect(0, 0, this.els.mist.width, this.els.mist.height);
@@ -1634,12 +1600,12 @@ export class SprayEngine {
     m.lineCap = 'round';
     for (let i = this.droplets.length - 1; i >= 0; i--) {
       const q = this.droplets[i];
-      q.vy += DROPLET_GRAVITY;
-      q.vx *= 0.965;
-      q.vy *= 0.99;
-      q.x += q.vx;
-      q.y += q.vy;
-      q.life -= q.decay;
+      q.vy += DROPLET_GRAVITY * step;
+      q.vx *= Math.pow(0.965, step);
+      q.vy *= Math.pow(0.99, step);
+      q.x += q.vx * step;
+      q.y += q.vy * step;
+      q.life -= q.decay * step;
       if (q.life <= 0) {
         this.droplets.splice(i, 1);
         continue;
@@ -1654,7 +1620,7 @@ export class SprayEngine {
         m.strokeStyle = `rgba(${q.h},${a.toFixed(3)})`;
         m.lineWidth = q.r * 1.7;
         m.beginPath();
-        m.moveTo(q.x - q.vx * 2.4, q.y - q.vy * 2.4);
+        m.moveTo(q.x - q.vx * 0.8, q.y - q.vy * 0.8);
         m.lineTo(q.x, q.y);
         m.stroke();
       } else {
@@ -1665,68 +1631,23 @@ export class SprayEngine {
       }
     }
 
-    if (this.ptr.down && !done) this.drawJet(m);
+    if (this.ptr.down && !done) this.drawJet(m, now);
   }
 
-  /**
-   * The paint leaving the nozzle, seen head on: strands firing out of the
-   * centre and tearing apart as they go, redrawn from scratch every frame.
-   *
-   * Deliberately not a radial gradient. A soft disc around the nozzle is what
-   * makes a spray read as smoke however tightly it is drawn — the eye needs
-   * *filaments* to call it liquid.
-   */
-  private drawJet(m: CanvasRenderingContext2D): void {
-    const R = this.radius;
-    const cx = this.can.x;
-    const cy = this.can.y;
-    const hues = this.host.getArt().hues;
-
-    // Lag: airborne paint keeps the nozzle's old position for a moment, so the
-    // whole stream smears opposite the travel.
-    const lagX = -this.canVx * 1.1;
-    const lagY = -this.canVy * 1.1;
-
-    const strands = 26 + ((Math.random() * 10) | 0);
-    for (let i = 0; i < strands; i++) {
-      const ang = Math.random() * TAU;
-      const cos = Math.cos(ang);
-      const sin = Math.sin(ang);
-      // Nothing sprays down through the can it just came out of: the further a
-      // strand points into the body, the less likely it is to be drawn.
-      if (sin > 0.3 && Math.random() < sin) continue;
-      // Long thin ones among short fat ones, so the jet has some grain to it.
-      const thin = Math.random() < 0.6;
-      const r0 = R * (0.04 + Math.random() * 0.2);
-      const r1 = r0 + R * (thin ? 0.45 + Math.random() * 0.95 : 0.2 + Math.random() * 0.45);
-      const x0 = cx + cos * r0;
-      const y0 = cy + sin * r0;
-      const x1 = cx + cos * r1 + lagX;
-      const y1 = cy + sin * r1 + lagY;
-      // A quarter of the stream catches the light as wet highlight.
-      const h = Math.random() < 0.25 ? '255,190,238' : hues[(Math.random() * hues.length) | 0];
-      const a = (thin ? 0.34 : 0.5) + Math.random() * 0.34;
-      // Each strand thins out along its length rather than ending on a hard
-      // stop, which is how a stream of paint actually breaks into droplets.
-      const g = m.createLinearGradient(x0, y0, x1, y1);
-      g.addColorStop(0, `rgba(${h},${a.toFixed(3)})`);
-      g.addColorStop(0.65, `rgba(${h},${(a * 0.5).toFixed(3)})`);
-      g.addColorStop(1, `rgba(${h},0)`);
-      m.strokeStyle = g;
-      m.lineWidth = thin ? 0.8 + Math.random() * 1.5 : 2.2 + Math.random() * 2.6;
-      // Bowed, not ruled: a torn thread of paint never leaves straight.
-      const bow = (Math.random() - 0.5) * (r1 - r0) * 0.4;
-      m.beginPath();
-      m.moveTo(x0, y0);
-      m.quadraticCurveTo((x0 + x1) / 2 - sin * bow, (y0 + y1) / 2 + cos * bow, x1, y1);
-      m.stroke();
-    }
-
-    // Wet core where the stream leaves the can.
-    m.fillStyle = `rgba(${hues[0]},0.5)`;
-    m.beginPath();
-    m.arc(cx, cy, R * 0.09, 0, TAU);
-    m.fill();
+  /** A fine, translucent aerosol cone; pigment and detail remain visible beneath it. */
+  private drawJet(m: CanvasRenderingContext2D, now: number): void {
+    const radius = this.radius;
+    const x = this.ptr.x;
+    const y = this.ptr.y;
+    m.save();
+    m.translate(x, y);
+    m.rotate(this.can.rot * Math.PI / 180);
+    m.globalAlpha = 0.22;
+    m.drawImage(this.airBrush, -radius * 0.85, -radius * 1.05, radius * 1.7, radius * 1.5);
+    m.globalAlpha = 0.12;
+    const breath = this.reducedMotion ? 0 : Math.sin(now * 0.009) * radius * 0.035;
+    m.drawImage(this.airBrush, -radius * 0.5 + breath, -radius * 0.7, radius, radius * 0.8);
+    m.restore();
   }
 
   // -------------------------------------------------------------------- audio

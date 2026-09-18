@@ -57,8 +57,8 @@
 
 .wall__canvas--glow {
   mix-blend-mode: screen;
-  opacity: 0.42;
-  filter: blur(1px);
+  opacity: 0.2;
+  filter: blur(12px);
 }
 
 /* Wet paint. `screen` because a specular highlight adds light to whatever is
@@ -66,7 +66,7 @@
    and wet paint reflects the room, not itself. */
 .wall__canvas--wet {
   mix-blend-mode: screen;
-  opacity: 0.5;
+  opacity: 0.18;
 }
 
 /* The can's light. Two stops rather than one so it has a hot centre and a long
@@ -95,7 +95,7 @@
 
 .wall__canvas--grain {
   mix-blend-mode: overlay;
-  opacity: 0.55;
+  opacity: 0.34;
   pointer-events: none;
 }
 
@@ -170,13 +170,13 @@
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 18%;
+  bottom: 22%;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
   pointer-events: none;
-  transition: opacity 0.5s ease;
+  transition: opacity 0.3s ease;
 }
 
 .hint__row {
@@ -202,45 +202,26 @@
   font-family: Archivo, sans-serif;
   font-style: italic;
   font-weight: 900;
-  font-size: clamp(22px, 2.8vw, 38px);
+  font-size: clamp(32px, 4.5vw, 66px);
   letter-spacing: -0.025em;
   text-transform: uppercase;
   color: #fff;
   white-space: nowrap;
   transform: skewX(-7deg);
   text-shadow:
-    0 0 22px rgba(255, 46, 154, 0.75),
-    0 0 64px rgba(190, 70, 255, 0.45),
+    0 0 36px rgba(255, 46, 154, 0.22),
     0 4px 18px rgba(0, 0, 0, 0.85);
-  animation: ctqPulse 2.6s ease-in-out infinite;
-}
-
-/* Keyed off the primary input, not viewport width: a narrow desktop window
-   still has a mouse, and a tablet does not. */
-.hint__copy--touch {
-  display: none;
-}
-
-@media (hover: none) {
-  .hint__copy--pointer {
-    display: none;
-  }
-
-  .hint__copy--touch {
-    display: inline;
-  }
+  animation: wall-type-in 0.8s cubic-bezier(.2,.8,.2,1) both;
 }
 
 .hint__sub {
-  font-family: Archivo, sans-serif;
-  font-style: italic;
-  font-weight: 900;
-  font-size: clamp(11px, 1.15vw, 15px);
-  letter-spacing: -0.01em;
+  font-family: 'Space Mono', monospace;
+  font-weight: 400;
+  font-size: clamp(10px, 1vw, 12px);
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.5);
   white-space: nowrap;
-  transform: skewX(-7deg);
 }
 
 .hint__tail {
@@ -344,11 +325,16 @@
   z-index: 16;
   /* The bar itself takes the clicks; the full-width track must not. */
   pointer-events: none;
-  transition: opacity 0.35s ease;
+  transition:
+    opacity 0.45s ease,
+    transform 0.45s cubic-bezier(0.3, 0.8, 0.3, 1);
 }
 
+/* Set on the first mark and again on the reveal. It sinks as it fades so it
+   reads as getting out of the way rather than blinking off. */
 .can-tabs--hidden {
   opacity: 0;
+  transform: translateY(14px);
 }
 
 .can-tabs__bar {
@@ -359,7 +345,7 @@
   gap: 3px;
   max-width: 100%;
   padding: 5px 5px 5px 13px;
-  border-radius: 24px;
+  border-radius: 18px;
   background: rgba(10, 8, 14, 0.62);
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -387,7 +373,7 @@
   align-items: center;
   gap: 6px;
   padding: 6px 8px 7px;
-  border-radius: 16px;
+  border-radius: 12px;
   cursor: pointer;
   white-space: nowrap;
   transition:
@@ -429,16 +415,14 @@
 
 .can-tabs__button--active,
 .can-tabs__button--active:hover {
-  background: rgba(255, 255, 255, 0.94);
-  color: #0b0a0d;
+  background: rgba(255, 255, 255, 0.09);
+  color: #fff;
 }
 
 .can-tabs__button--active .can-tabs__thumb,
 .can-tabs__button--active:hover .can-tabs__thumb {
-  border-color: #0b0a0d;
-  box-shadow:
-    0 0 0 2px rgba(255, 58, 205, 0.75),
-    0 2px 8px rgba(0, 0, 0, 0.5);
+  border-color: rgba(255, 125, 225, 0.85);
+  box-shadow: 0 0 0 1px rgba(255, 58, 205, 0.4);
 }
 
 /* -------------------------------------------------------------------- can */
@@ -452,6 +436,7 @@
   pointer-events: none;
   z-index: 8;
   will-change: transform;
+  transition: opacity 0.18s ease;
   filter: drop-shadow(0 0 22px rgba(255, 58, 205, 0.5)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.55));
 }
 
@@ -474,10 +459,6 @@
   filter: drop-shadow(0 0 26px rgba(150, 140, 190, 0.4)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.65));
 }
 
-.can--vintage {
-  filter: drop-shadow(0 0 16px rgba(255, 214, 170, 0.28)) drop-shadow(0 26px 26px rgba(0, 0, 0, 0.6));
-}
-
 .can__svg {
   width: 100%;
   display: block;
@@ -487,7 +468,7 @@
 /* ------------------------------------------------------------------ mobile */
 
 /* The meter and the buttons close in on the centre before the phone breakpoint
-   does, so the can tabs move up to their own row early. Five tabs are ~410px
+   does, so the can tabs move up to their own row early. Four tabs are ~345px
    wide, which is what sets this threshold. */
 @media (max-width: 1000px) {
   .can-tabs {
@@ -518,7 +499,7 @@
     white-space: normal;
     text-align: center;
     text-wrap: balance;
-    font-size: clamp(19px, 6.2vw, 30px);
+    font-size: clamp(32px, 9vw, 52px);
     line-height: 1.14;
   }
 
@@ -544,5 +525,74 @@
   .can-tabs {
     bottom: 118px;
     padding: 0 18px;
+  }
+}
+
+.wall__status {
+  font-family: 'Space Mono', monospace;
+  color: rgba(255,255,255,0.4);
+  font-size: 8px;
+  letter-spacing: 0.18em;
+}
+
+.wall__status {
+  position: absolute;
+  z-index: 6;
+  top: max(32px, env(safe-area-inset-top));
+  right: 30px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+
+.wall__status span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #ff62d4;
+  opacity: 0.45;
+  transition: opacity 0.2s, box-shadow 0.2s;
+}
+
+.wall[data-spraying='true'] .wall__status span {
+  opacity: 1;
+  box-shadow: 0 0 12px #ff62d4;
+}
+
+.wall--done .wall__status { opacity: 0; }
+
+.controls__button:active { transform: scale(0.96); }
+.controls__button:focus-visible,
+.can-tabs__button:focus-visible {
+  outline: 2px solid #ff9ee6;
+  outline-offset: 4px;
+}
+
+@keyframes wall-type-in {
+  from { opacity: 0; transform: translateY(12px) skewX(-7deg); }
+  to { opacity: 1; transform: translateY(0) skewX(-7deg); }
+}
+
+@media (max-width: 700px) {
+  .wall__status { top: 28px; right: 20px; font-size: 6px; letter-spacing: 0.1em; }
+  .controls { top: 62px; bottom: auto; right: 18px; gap: 5px; }
+  .controls__button { min-height: 44px; padding: 9px 10px; font-size: 8px; letter-spacing: 0.12em; }
+  .can-tabs { bottom: max(22px, env(safe-area-inset-bottom)); padding: 0 12px; }
+  .can-tabs__bar { flex-wrap: nowrap; padding: 5px; gap: 1px; }
+  .can-tabs__label { display: none; }
+  .can-tabs__button { padding: 5px 6px 7px; font-size: 8px; }
+  .can-tabs__thumb { width: clamp(40px, 10vw, 52px); height: 28px; }
+  .hud { bottom: calc(105px + env(safe-area-inset-bottom)); left: 24px; right: 24px; }
+  .hud__label, .hud__pct { font-size: 8px; }
+  .hint { bottom: 28%; }
+  .hint__sub { font-size: 9px; letter-spacing: 0.08em; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wall *, .wall *::before, .wall *::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
   }
 }
